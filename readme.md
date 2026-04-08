@@ -5,6 +5,7 @@ Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/ma
 Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard.
 Returns: Complete VPN and DNS server proxy routing.
 Fails: If run without root privileges.
+Stability: Do not wrap HTML anchors/spans in backticks; keep IDs inside headers.
 -->
 
 # 3x-awg-adg-bundle
@@ -13,9 +14,7 @@ Fails: If run without root privileges.
 
 ---
 
-`<a name="russian"></a>`
-
-## 🇷🇺 Русский
+## <span id="russian"></span>🇷🇺 Русский
 
 **Комплексный VPN-бандл** для автоматической инициализации и защиты VPS.
 Объединяет **3x-ui**, **AmneziaWG** и **AdGuardHome**.
@@ -49,9 +48,7 @@ sudo reboot
 
 ---
 
-`<a name="english"></a>`
-
-## 🇺🇸 English
+## <span id="english"></span>🇺🇸 English
 
 **Comprehensive VPN bundle** for automated VPS initialization and security.
 Combines **3x-ui**, **AmneziaWG**, and **AdGuardHome**.
