@@ -53,7 +53,7 @@ else
 fi
 
 apt install -y curl wget git mc ufw fail2ban nano iptables iptables-persistent \
-               build-essential dkms $LINUX_HEADERS jq openssl libmnl-dev sqlite3 libelf-dev whois
+               build-essential dkms $LINUX_HEADERS jq openssl libmnl-dev sqlite3 libelf-dev whois qrencode
 
 log "Настройка редактора mcedit по умолчанию..."
 update-alternatives --set editor /usr/bin/mcedit || true
@@ -114,6 +114,29 @@ EOF
 
     # Применение защитного пути в БД 3x-ui (используем INSERT OR REPLACE для надежности)
     sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '/${PANEL_PATH}/');"
+    
+    # Создание дефолтного входящего соединения (VLESS + Reality)
+    log "Создание дефолтного VLESS-Reality инбаунда..."
+    XRAY_BIN="/usr/local/x-ui/bin/xray"
+    if [ -f "$XRAY_BIN" ]; then
+        UUID=$(cat /proc/sys/kernel/random/uuid)
+        KEYS=$($XRAY_BIN x25519)
+        PRIV_KEY=$(echo "$KEYS" | grep "Private key:" | cut -d' ' -f3)
+        PUB_KEY=$(echo "$KEYS" | grep "Public key:" | cut -d' ' -f3)
+        SHORT_ID=$(openssl rand -hex 8)
+        X_PORT=443
+        
+        SETTINGS="{\"clients\": [{\"id\": \"$UUID\", \"flow\": \"xtls-rprx-vision\"}], \"decryption\": \"none\", \"fallbacks\": []}"
+        STREAM_SETTINGS="{\"network\": \"tcp\", \"security\": \"reality\", \"realitySettings\": {\"show\": false, \"dest\": \"google.com:443\", \"proxyProtocol\": 0, \"serverNames\": [\"google.com\", \"www.google.com\"], \"privateKey\": \"$PRIV_KEY\", \"minClient\": \"\", \"maxClient\": \"\", \"maxTimeDiff\": 0, \"shortIds\": [\"$SHORT_ID\"]}, \"tcpSettings\": {\"header\": {\"type\": \"none\"}}}"
+        SNIFFING="{\"enabled\": true, \"destOverride\": [\"http\", \"tls\", \"quic\", \"fakedns\"]}"
+        
+        sqlite3 /etc/x-ui/x-ui.db "INSERT INTO inbounds (remark, enable, port, protocol, settings, stream_settings, tag, sniffing, listen) VALUES ('VLESS-Reality-Default', 1, $X_PORT, 'vless', '$SETTINGS', '$STREAM_SETTINGS', 'inbound-$X_PORT', '$SNIFFING', '');"
+        
+        VLESS_LINK="vless://$UUID@$SERVER_IP:$X_PORT?security=reality&encryption=none&pbk=$PUB_KEY&headerType=none&fp=chrome&spx=%2F&type=tcp&sni=google.com&sid=$SHORT_ID#VLESS-Reality-Default"
+    else
+        warn "Бинарный файл xray не найден, пропуск создания инбаунда."
+    fi
+
     systemctl restart x-ui
 fi
 
@@ -352,14 +375,25 @@ log "Установка и настройка успешно завершены!
 echo -e "\n=================================================================="
 echo -e "${GREEN}SSH доступ:${RESET}"
 echo -e "Порт: ${YELLOW}2244${RESET}"
+
 echo -e "\n${GREEN}Панель 3x-ui:${RESET}"
 echo -e "URL: ${YELLOW}http://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET}"
 echo -e "User: ${YELLOW}${PANEL_USER}${RESET} / Pass: ${YELLOW}${PANEL_PASS}${RESET}"
+
+if [ ! -z "$VLESS_LINK" ]; then
+    echo -e "\n${GREEN}Дефолтная ссылка VLESS (Reality):${RESET}"
+    echo -e "${YELLOW}${VLESS_LINK}${RESET}"
+fi
+
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "URL: ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
 echo -e "User: ${YELLOW}${ADG_USER}${RESET} / Pass: ${YELLOW}${ADG_PASS}${RESET}"
+
 echo -e "\n${GREEN}AmneziaWG:${RESET}"
-echo -e "Конфиг: ${YELLOW}/root/amnezia_client.conf${RESET}"
+echo -e "Конфиг сохранен в: ${YELLOW}/root/amnezia_client.conf${RESET}"
+echo -e "QR-код для мобильного клиента:"
+qrencode -t ansiutf8 < /root/amnezia_client.conf
+
 echo -e "\n${GREEN}Все credentials сохранены:${RESET} ${YELLOW}${CREDS_FILE}${RESET}"
 echo -e "==================================================================\n"
 echo -e "${RED}ВНИМАНИЕ: Выполните 'sudo reboot' для окончательной активации AmneziaWG!${RESET}\n"
