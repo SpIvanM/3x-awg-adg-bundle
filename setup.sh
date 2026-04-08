@@ -45,7 +45,7 @@ else
 fi
 
 apt install -y curl wget git mc ufw fail2ban nano iptables iptables-persistent \
-               build-essential dkms $LINUX_HEADERS jq openssl libmnl-dev sqlite3 libelf-dev
+               build-essential dkms $LINUX_HEADERS jq openssl libmnl-dev sqlite3 libelf-dev whois
 
 log "Настройка редактора mcedit по умолчанию..."
 update-alternatives --set editor /usr/bin/mcedit || true
@@ -94,8 +94,11 @@ ${PANEL_PASS}
 ${PANEL_PORT}
 EOF
 
-# Применение защитного пути в БД 3x-ui
-sqlite3 /etc/x-ui/x-ui.db "UPDATE settings SET value = '/${PANEL_PATH}/' WHERE key = 'webBasePath';"
+# Ожидание инициализации БД 3x-ui
+sleep 5
+
+# Применение защитного пути в БД 3x-ui (используем INSERT OR REPLACE для надежности)
+sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '/${PANEL_PATH}/');"
 systemctl restart x-ui
 
 # ==============================================================================
@@ -231,12 +234,17 @@ if [ ! -f "/opt/AdGuardHome/AdGuardHome" ]; then
 fi
 
 systemctl stop AdGuardHome || true
+ADG_PORT=$(shuf -i 10000-65000 -n 1)
+ADG_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
+ADG_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
+ADG_HASH=$(mkpasswd -m bcrypt "$ADG_PASS")
+
 cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
 bind_host: 0.0.0.0
-bind_port: 5353
+bind_port: $ADG_PORT
 users:
-  - name: admin
-    password: \$2y\$05\$S.r2W/56l1D9.35U7Jp3I.vG9iH.z9/1R.Q/o6h9K8n.Y8l.Y/.G2
+  - name: $ADG_USER
+    password: $ADG_HASH
 dns:
   bind_hosts:
     - 0.0.0.0
@@ -261,7 +269,7 @@ ufw allow 22/tcp
 ufw allow 2244/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
-ufw allow 5353/tcp
+ufw allow $ADG_PORT/tcp
 ufw allow 53/tcp
 ufw allow 53/udp
 ufw allow 2053/tcp
@@ -299,7 +307,8 @@ echo -e "\n${GREEN}Панель 3x-ui:${RESET}"
 echo -e "URL: ${YELLOW}http://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET}"
 echo -e "User: ${YELLOW}${PANEL_USER}${RESET} / Pass: ${YELLOW}${PANEL_PASS}${RESET}"
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
-echo -e "URL: ${YELLOW}http://${SERVER_IP}:5353${RESET} (admin / admin)"
+echo -e "URL: ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
+echo -e "User: ${YELLOW}${ADG_USER}${RESET} / Pass: ${YELLOW}${ADG_PASS}${RESET}"
 echo -e "\n${GREEN}AmneziaWG:${RESET}"
 echo -e "Конфиг: ${YELLOW}/root/amnezia_client.conf${RESET}"
 echo -e "==================================================================\n"
