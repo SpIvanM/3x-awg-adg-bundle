@@ -1,95 +1,121 @@
 <!--
-Name: vps-vpn-triad (3x-ui + AWG + AdGuard)
-Description: Configures OS networking, 3x-ui, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
-Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
-Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard.
-Returns: Complete VPN and DNS server proxy routing.
-Fails: If run without root privileges.
-Stability: Do not wrap HTML anchors/spans in backticks; keep IDs inside headers.
+Name: 3x-awg-adg-bundle Comprehensive Guide
+Description: Documentation for the automated VPN/DNS triad (3x-ui, AmneziaWG, AdGuardHome).
+Usage: Refer to installation commands below.
+Behavior: Provides installation/uninstallation instructions, architectural overview, and security details.
+Returns: Structured project overview.
+Fails: n/a
 -->
 
-# 3x-awg-adg-bundle
+# 🛡️ 3x-awg-adg-bundle
 
-[🇷🇺 Русский](#russian) | [🇺🇸 English](#english)
+**The Ultimate "One-Click" Shield for your VPS.**  
+Auto-deploy a professional-grade VPN ecosystem featuring **AmneziaWG**, **3x-ui (Xray)**, and **AdGuardHome**.
+
+[🇷🇺 Перейти к описанию на русском](#russian) | [🇺🇸 Switch to English description](#english)
 
 ---
 
 ## <span id="russian"></span>🇷🇺 Русский
 
-**Комплексный VPN-бандл** для автоматической инициализации и защиты VPS.  
-Объединяет **3x-ui**, **AmneziaWG** и **AdGuardHome** в одну экосистему.
+Этот проект превращает чистый VPS в мощный, защищенный интернет-шлюз за 5 минут. Мы объединили лучшие инструменты обхода блокировок и фильтрации рекламы в одну связную систему.
 
-### Особенности
+### 🧩 Топология сети
 
-- **Идемпотентность**: Скрипт можно запускать повторно. Он подхватит существующие пароли/порты и не будет переустанавливать то, что уже работает.
-- **DPI Protection**: AmneziaWG с настроенными параметрами обфускации (защита от блокировок ТСПУ).
-- **DNS Security**: AdGuardHome блокирует рекламу и трекеры. Включен **Безопасный поиск** (Google, YT, Yandex).
-- **Auto-Config**: Автоматическое создание VLESS-Reality инбаунда и AmneziaWG конфига с QR-кодом.
+```mermaid
+graph TD
+    User([Устройства])
+    
+    subgraph VPS [VPS Сервер - Защищенная Экосистема]
+        AWG[AmneziaWG]
+        XR[Xray Core / 3x-ui]
+        AGH[AdGuard Home]
+        
+        AWG -->|"TProxy (Весь трафик)"| XR
+        AWG -.->|"Перехват DNS"| AGH
+        XR -.->|"Upstream DNS"| AGH
+    end
 
-### Поддерживаемые ОС
+    XR -->|"VLESS / Reality / Direct"| Net((Интернет))
+    AGH -->|"DoH / DoT"| DNS((Публичный DNS))
 
-- **Debian 11+**
-- **Ubuntu 20.04+**
+    User -->|"UDP: Amnezia (Обфускация)"| AWG
+    User -->|"TCP 443: Reality"| XR
+    User -->|"Порт 2244"| SSH[Защищенный SSH]
+```
 
-### Установка
+### 🚀 Преимущества связки
 
-Выполните одну команду для полной установки:
+1.  **DPI-Shield (AmneziaWG)**: Специальная версия WireGuard с модифицированными заголовками пакетов. Она выглядит как "шум" для систем глубокого анализа трафика (ТСПУ), что позволяет обходить блокировки, которые убивают обычный WireGuard.
+2.  **Двойная фильтрация (AdGuardHome)**: Весь ваш VPN-трафик проходит через AGH. Это убирает рекламу, трекеры и обеспечивает **Безопасный поиск** на уровне сети для всех подключенных устройств.
+3.  **Гибкость Xray (Reality)**: В комплекте идет панель 3x-ui, настроенная на работу через 443 порт с протоколом Reality. Это делает ваш прокси-трафик неотличимым от посещения популярного сайта (например, Microsoft или Apple).
+4.  **Умная маршрутизация (TProxy)**: Весь трафик из VPN автоматически попадает в Xray. Это позволяет реализовать сложные сценарии: например, отправлять часть трафика через цепочку других прокси.
+5.  **Hardening "из коробки"**: Скрипт меняет SSH на порт 2244, включает BBR для ускорения интернета и настраивает оптимальные параметры ядра.
+
+### 🛠️ Установка
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
-### Удаление
-
-Если нужно полностью очистить сервер:
-
+### 🧹 Удаление
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/uninstall.sh | sudo bash
 ```
 
-### Важно
-
-- **Рестарт**: После первой установки обязателен `sudo reboot`.
-- **Доступ**: Все пароли и ссылки сохраняются в файле `/root/.vpn-credentials`.
-- **SSH**: Порт меняется на **2244**.
+### ⚠️ Важные примечания
+- **Перезагрузка**: Обязательно выполните `sudo reboot` после первой установки.
+- **Учетные данные**: Все ссылки, пароли и QR-коды для подключения сохраняются в `/root/.vpn-credentials`.
 
 ---
 
 ## <span id="english"></span>🇺🇸 English
 
-**Comprehensive VPN bundle** for automated VPS initialization and security.  
-Integrates **3x-ui**, **AmneziaWG**, and **AdGuardHome** into a single ecosystem.
+Transform a clean VPS into a robust, high-performance internet gateway in 5 minutes. We combine the best-in-class censorship-bypass tools and ad-filtering solutions into a seamless ecosystem.
 
-### Features
+### 🧩 Network Topology
 
-- **Idempotency**: The script can be run multiple times safely. It preserves existing credentials/ports and skips already installed components.
-- **DPI Protection**: AmneziaWG with pre-configured obfuscation parameters to bypass DPI filters.
-- **DNS Security**: AdGuardHome for ad-blocking and tracking protection. **SafeSearch** is enabled (Google, YT, Yandex).
-- **Auto-Config**: Automatic creation of VLESS-Reality inbound and AmneziaWG config with QR code.
+```mermaid
+graph TD
+    User([Devices])
+    
+    subgraph VPS [VPS Server - Shielded Ecosystem]
+        AWG[AmneziaWG]
+        XR[Xray Core / 3x-ui]
+        AGH[AdGuard Home]
+        
+        AWG -->|"TProxy (All Traffic)"| XR
+        AWG -.->|"Intercept DNS"| AGH
+        XR -.->|"Upstream DNS"| AGH
+    end
 
-### Supported OS
+    XR -->|"VLESS / Reality / Direct"| Net((Internet))
+    AGH -->|"DoH / DoT"| DNS((Public DNS))
 
-- **Debian 11+**
-- **Ubuntu 20.04+**
+    User -->|"UDP: Amnezia (Obfuscated)"| AWG
+    User -->|"TCP 443: Reality"| XR
+    User -->|"Port 2244"| SSH[Secure SSH]
+```
 
-### Installation
+### 💎 Key Advantages
 
-Run a single command for a complete installation:
+1.  **DPI-Shield (AmneziaWG)**: A specialized WireGuard implementation with modified packet headers. It looks like random noise to Deep Packet Inspection (DPI) systems, bypassing blocks that "kill" standard WireGuard.
+2.  **DNS-Level Protection (AdGuardHome)**: All VPN traffic is routed through AGH. This eliminates ads, and trackers, and enforces **SafeSearch** across all connected devices directly at the network level.
+3.  **Stealth Proximization (Reality)**: The bundle includes the 3x-ui panel pre-configured with VLESS-Reality on port 443. This masks your proxy traffic as legitimate HTTPS traffic to popular websites.
+4.  **Cascading Routing (TProxy)**: Traffic from the VPN is transparently proxied into Xray. This allows for advanced routing logic, such as chaining multiple proxies or selective routing.
+5.  **Out-of-the-Box Hardening**: Automatically updates SSH to port 2244, enables BBR for traffic optimization, and applies security sysctl tweaks.
+
+### 🛠️ Installation
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
-### Uninstallation
-
-To completely remove all components from the server:
-
+### 🧹 Uninstallation
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/uninstall.sh | sudo bash
 ```
 
-### Important
-
+### ⚠️ Important Notes
 - **Reboot**: A `sudo reboot` is mandatory after the initial installation.
-- **Credentials**: All passwords and links are stored in `/root/.vpn-credentials`.
-- **SSH**: The default port is changed to **2244**.
+- **Credentials**: All generated access links, passwords, and QR codes are stored in `/root/.vpn-credentials` for your convenience.
