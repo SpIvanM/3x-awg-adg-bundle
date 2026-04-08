@@ -137,6 +137,12 @@ fi
 [ -z "$PANEL_PASS" ] && PANEL_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
 [ -z "$PANEL_PATH" ] && PANEL_PATH=$(tr -dc a-z0-9 </dev/urandom | head -c 16)
 
+# Prepare the AdGuard DNS listener port early so Xray can point to the final value.
+if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+    ADG_DNS_PORT=$(grep "ADG_DNS_PORT" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+fi
+[ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
+
 if systemctl is-active --quiet x-ui 2>/dev/null && [ -f /etc/x-ui/x-ui.db ]; then
     warn "3x-ui уже установлен и работает. Пропускаем скрипт инсталляции."
 else
@@ -153,7 +159,8 @@ EOF
 fi
 
 # Применение защитного пути в БД 3x-ui (даже если установлен, обновляем путь)
-sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '/${PANEL_PATH}/');"
+XUI_BIN="$(command -v x-ui || echo /usr/local/x-ui/x-ui)"
+"$XUI_BIN" setting -webBasePath "${PANEL_PATH}" >/dev/null 2>&1 || warn "Не удалось применить webBasePath через x-ui CLI."
 
 # Проверяем, есть ли уже инбаунды, чтобы не создавать дубликаты
 INBOUND_EXISTS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT count(*) FROM inbounds WHERE remark='VLESS-Reality-Default';")
@@ -198,9 +205,9 @@ fi
 log "Связывание Xray DNS с AdGuardHome..."
 # Пытаемся внедрить DNS в шаблон конфига. Это сложная операция для sed, 
 # поэтому мы просто убеждаемся, что AGH указан в качестве upstream для Xray.
-sqlite3 /etc/x-ui/x-ui.db "UPDATE settings SET value = '$ADG_DNS_PORT' WHERE key='adguard_dns_port';" 2>/dev/null || true
+sqlite3 /etc/x-ui/x-ui.db "DELETE FROM settings WHERE key='adguard_dns_port'; INSERT INTO settings (key, value) VALUES ('adguard_dns_port', '$ADG_DNS_PORT');" 2>/dev/null || true
 # Большинство новых версий 3x-ui поддерживают прямое указание DNS в настройках
-sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayDNSConfig', '{\"servers\":[\"127.0.0.1:$ADG_DNS_PORT\"]}');"
+sqlite3 /etc/x-ui/x-ui.db "DELETE FROM settings WHERE key='xrayDNSConfig'; INSERT INTO settings (key, value) VALUES ('xrayDNSConfig', '{\"servers\":[\"127.0.0.1:$ADG_DNS_PORT\"]}');"
 
 systemctl restart x-ui
 
@@ -251,7 +258,7 @@ H3=$(shuf -i 100000000-999999999 -n 1)
 H4=$(shuf -i 100000000-999999999 -n 1)
 AWG_PORT=51820
 # Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
-ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
+[ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
 SERVER_PRIV=$(awg genkey)
 SERVER_PUB=$(echo "$SERVER_PRIV" | awg pubkey)
@@ -392,9 +399,7 @@ dns:
   upstream_dns:
     - https://dns.cloudflare.com/dns-query
     - https://dns.google/dns-query
-  bootstrap_dns:
-    - 1.1.1.1
-    - 8.8.8.8
+  bootstrap_dns: ["1.1.1.1", "8.8.8.8"]
   cache_size: 4194304
 filtering:
   safe_search:
@@ -526,7 +531,7 @@ cat <<CREDS > "$CREDS_FILE"
 # Generated: $(date -Iseconds)
 # ====================================
 SSH_PORT=2244
-PANEL_URL=http://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/
+PANEL_URL=https://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/
 PANEL_USER=${PANEL_USER}
 PANEL_PASS=${PANEL_PASS}
 ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
@@ -543,7 +548,7 @@ echo -e "${GREEN}SSH доступ:${RESET}"
 echo -e "Порт: ${YELLOW}2244${RESET}"
 
 echo -e "\n${GREEN}Панель 3x-ui:${RESET}"
-echo -e "URL: ${YELLOW}http://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET} ${RED}(ВНИМАНИЕ: Только HTTP, последний слэш обязателен!)${RESET}"
+echo -e "URL: ${YELLOW}https://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET} ${RED}(ВНИМАНИЕ: HTTPS, при первом входе браузер может показать предупреждение сертификата)${RESET}"
 echo -e "User: ${YELLOW}${PANEL_USER}${RESET} / Pass: ${YELLOW}${PANEL_PASS}${RESET}"
 
 if [ ! -z "$VLESS_LINK" ]; then
