@@ -211,6 +211,8 @@ H2=$(shuf -i 100000000-999999999 -n 1)
 H3=$(shuf -i 100000000-999999999 -n 1)
 H4=$(shuf -i 100000000-999999999 -n 1)
 AWG_PORT=51820
+# Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
+ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
 SERVER_PRIV=$(awg genkey)
 SERVER_PUB=$(echo "$SERVER_PRIV" | awg pubkey)
@@ -235,9 +237,9 @@ H4 = $H4
 
 # Правила NAT и маршрутизации (TPROXY опционален)
 PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE
-# Разрешаем DNS-запросы от VPN-клиентов к AdGuardHome (10.8.0.1:53)
-PostUp = iptables -I INPUT -i awg0 -s 10.8.0.0/24 -p udp --dport 53 -j ACCEPT
-PostUp = iptables -I INPUT -i awg0 -s 10.8.0.0/24 -p tcp --dport 53 -j ACCEPT
+# DNAT: перенаправляем DNS от VPN-клиентов (порт 53) -> AdGuardHome (порт $ADG_DNS_PORT)
+PostUp = iptables -t nat -A PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT
+PostUp = iptables -t nat -A PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT
 PostUp = ip rule add fwmark 1 table 100 2>/dev/null || true
 PostUp = ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 PostUp = iptables -t mangle -N AWG_TPROXY 2>/dev/null || true
@@ -253,8 +255,8 @@ PostUp = iptables -t mangle -A AWG_TPROXY -j RETURN
 PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
 
 PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE 2>/dev/null || true
-PostDown = iptables -D INPUT -i awg0 -s 10.8.0.0/24 -p udp --dport 53 -j ACCEPT 2>/dev/null || true
-PostDown = iptables -D INPUT -i awg0 -s 10.8.0.0/24 -p tcp --dport 53 -j ACCEPT 2>/dev/null || true
+PostDown = iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT 2>/dev/null || true
+PostDown = iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT 2>/dev/null || true
 PostDown = iptables -t mangle -D PREROUTING -i awg0 -j AWG_TPROXY 2>/dev/null || true
 PostDown = iptables -t mangle -F AWG_TPROXY 2>/dev/null || true
 PostDown = iptables -t mangle -X AWG_TPROXY 2>/dev/null || true
@@ -301,11 +303,7 @@ chmod 600 /root/amnezia_client.conf
 # 4. УСТАНОВКА И НАСТРОЙКА ADGUARD HOME
 # ==============================================================================
 log "Установка AdGuardHome..."
-if systemctl is-active --quiet systemd-resolved; then
-    warn "Освобождение порта 53 (отключение systemd-resolved stub)..."
-    sed -i 's/#\?DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
-    systemctl restart systemd-resolved
-fi
+# DNS на случайном порту $ADG_DNS_PORT — systemd-resolved отключать не нужно
 
 # Генерируем новые credentials AdGuardHome при каждом запуске
 log "Генерация новых credentials AdGuardHome..."
@@ -326,30 +324,40 @@ fi
 # Всегда перезаписываем конфиг (новые порт, логин, пароль)
 log "Применение конфигурации AdGuardHome..."
 cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
-bind_host: 0.0.0.0
-bind_port: $ADG_PORT
+http:
+  pprof:
+    port: 6060
+    enabled: false
+  address: 0.0.0.0:$ADG_PORT
+  session_ttl: 720h
 users:
   - name: $ADG_USER
     password: $ADG_HASH
+auth_attempts: 5
+block_auth_min: 15
+http_proxy: ""
+language: ru
+theme: auto
 dns:
   bind_hosts:
     - 0.0.0.0
-  port: 53
+  port: $ADG_DNS_PORT
   upstream_dns:
     - https://dns.cloudflare.com/dns-query
     - https://dns.google/dns-query
   bootstrap_dns:
     - 1.1.1.1
     - 8.8.8.8
+  cache_size: 4194304
 filtering:
   safe_search:
     enabled: true
-    google: true
     bing: true
-    youtube: true
-    yandex: true
     duckduckgo: true
+    google: true
     pixabay: true
+    yandex: true
+    youtube: true
 filters:
   - enabled: true
     url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt
@@ -365,11 +373,23 @@ EOF
 mkdir -p /etc/systemd/system/AdGuardHome.service.d
 cat <<OVERRIDE > /etc/systemd/system/AdGuardHome.service.d/after-awg.conf
 [Unit]
-After=awg-quick@awg0.service
-Requires=awg-quick@awg0.service
+After=awg-quick@awg0.service network-online.target
+Wants=awg-quick@awg0.service network-online.target
+[Service]
+Restart=on-failure
+RestartSec=5
 OVERRIDE
 systemctl daemon-reload
+# Ждём появления интерфейса awg0 (до 15с) перед стартом AdGuardHome
+for _i in $(seq 1 15); do ip link show awg0 > /dev/null 2>&1 && break; sleep 1; done
 systemctl restart AdGuardHome
+# Проверяем что AGH реально запустился и слушает на ADG_DNS_PORT
+for _i in $(seq 1 10); do ss -ulnp | grep ":${ADG_DNS_PORT} " > /dev/null 2>&1 && break; sleep 1; done
+if ss -ulnp | grep ":${ADG_DNS_PORT} " > /dev/null 2>&1; then
+    log "AdGuardHome DNS (порт ${ADG_DNS_PORT}) слушает — OK"
+else
+    warn "AdGuardHome НЕ слушает на порту ${ADG_DNS_PORT}! Проверьте: journalctl -u AdGuardHome -n 50"
+fi
 
 # ==============================================================================
 # 5. НАСТРОЙКА SSH И ФАЕРВОЛА
@@ -388,8 +408,8 @@ ufw allow 443/tcp
 ufw allow ${ADG_PORT}/tcp
 ufw allow ${PANEL_PORT}/tcp
 ufw allow ${AWG_PORT}/udp
-# Разрешаем DNS от VPN-клиентов (AdGuardHome слушает на 10.8.0.1:53)
-ufw allow in on awg0 to 10.8.0.1 port 53
+# Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
+ufw allow in on awg0 to any port ${ADG_DNS_PORT}
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
 
@@ -437,6 +457,7 @@ PANEL_PASS=${PANEL_PASS}
 ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
 ADG_USER=${ADG_USER}
 ADG_PASS=${ADG_PASS}
+ADG_DNS_PORT=${ADG_DNS_PORT}
 AWG_CLIENT_CONF=/root/amnezia_client.conf
 CREDS
 chmod 600 "$CREDS_FILE"
@@ -457,7 +478,7 @@ fi
 
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
-echo -e "DNS-сервер (UDP): ${YELLOW}10.8.0.1${RESET} (Стандартный порт 53)"
+echo -e "DNS реальный порт: ${YELLOW}${ADG_DNS_PORT}${RESET} (клиент видит 10.8.0.1:53 через DNAT)"
 echo -e "User: ${YELLOW}${ADG_USER}${RESET} / Pass: ${YELLOW}${ADG_PASS}${RESET}"
 echo -e "Безопасный поиск: ${GREEN}ВКЛЮЧЕН${RESET}"
 
