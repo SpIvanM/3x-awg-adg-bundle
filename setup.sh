@@ -13,7 +13,13 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
+# Глобальные переменные и пути
 SCRIPT_VERSION="1.1.0"
+CREDS_FILE="/root/.vpn-credentials"
+LOG_FILE="/var/log/vpn-setup.log"
+LAST_RUN_FILE="/root/.vpn-setup-last-run"
+
+# Обработка аргументов
 ROTATE_CREDS=0
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -22,10 +28,7 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
-CREDS_FILE="/root/.vpn-credentials"
-LOG_FILE="/var/log/vpn-setup.log"
-LAST_RUN_FILE="/root/.vpn-setup-last-run"
-
+# Логирование (перенаправление вывода в файл и консоль)
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Цвета для вывода
