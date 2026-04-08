@@ -205,6 +205,9 @@ H4 = $H4
 
 # Правила NAT и маршрутизации (TPROXY опционален)
 PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE
+# Разрешаем DNS-запросы от VPN-клиентов к AdGuardHome (10.8.0.1:53)
+PostUp = iptables -I INPUT -i awg0 -s 10.8.0.0/24 -p udp --dport 53 -j ACCEPT
+PostUp = iptables -I INPUT -i awg0 -s 10.8.0.0/24 -p tcp --dport 53 -j ACCEPT
 PostUp = ip rule add fwmark 1 table 100 2>/dev/null || true
 PostUp = ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 PostUp = iptables -t mangle -N AWG_TPROXY 2>/dev/null || true
@@ -220,6 +223,8 @@ PostUp = iptables -t mangle -A AWG_TPROXY -j RETURN
 PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
 
 PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE 2>/dev/null || true
+PostDown = iptables -D INPUT -i awg0 -s 10.8.0.0/24 -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+PostDown = iptables -D INPUT -i awg0 -s 10.8.0.0/24 -p tcp --dport 53 -j ACCEPT 2>/dev/null || true
 PostDown = iptables -t mangle -D PREROUTING -i awg0 -j AWG_TPROXY 2>/dev/null || true
 PostDown = iptables -t mangle -F AWG_TPROXY 2>/dev/null || true
 PostDown = iptables -t mangle -X AWG_TPROXY 2>/dev/null || true
@@ -309,6 +314,15 @@ filters:
     name: AdAway Default Blocklist
     id: 2
 EOF
+
+# Гарантируем запуск AdGuardHome ПОСЛЕ awg0 (нужен 10.8.0.1 для bind)
+mkdir -p /etc/systemd/system/AdGuardHome.service.d
+cat <<OVERRIDE > /etc/systemd/system/AdGuardHome.service.d/after-awg.conf
+[Unit]
+After=awg-quick@awg0.service
+Requires=awg-quick@awg0.service
+OVERRIDE
+systemctl daemon-reload
 systemctl start AdGuardHome
 
 # ==============================================================================
@@ -325,6 +339,8 @@ ufw allow 443/tcp
 ufw allow ${ADG_PORT}/tcp
 ufw allow ${PANEL_PORT}/tcp
 ufw allow ${AWG_PORT}/udp
+# Разрешаем DNS от VPN-клиентов (AdGuardHome слушает на 10.8.0.1:53)
+ufw allow in on awg0 to 10.8.0.1 port 53
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
 
