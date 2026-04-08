@@ -1,8 +1,8 @@
 #!/bin/bash
 # Name: vps-vpn-triad (3x-ui + AWG + AdGuard)
 # Description: Configures OS networking, 3x-ui, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
-# Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
-# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard.
+# Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate]
+# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard. Use -r to rotate credentials.
 # Returns: Complete VPN and DNS server proxy routing.
 # Fails: If run without root privileges.
 # ==============================================================================
@@ -14,9 +14,13 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 SCRIPT_VERSION="1.1.0"
-CREDS_FILE="/root/.vpn-credentials"
-LOG_FILE="/var/log/vpn-setup.log"
-LAST_RUN_FILE="/root/.vpn-setup-last-run"
+ROTATE_CREDS=0
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --rotate|-r) ROTATE_CREDS=1; shift ;;
+        *) shift ;;
+    esac
+done
 
 exec > >(tee -a "$LOG_FILE") 2>&1
 
@@ -111,12 +115,20 @@ log "Проверка и установка 3x-ui..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
 
-# Генерируем новые credentials 3x-ui при каждом запуске
-log "Генерация новых credentials 3x-ui..."
-PANEL_PORT=2053
-PANEL_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
-PANEL_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
-PANEL_PATH=$(tr -dc a-z0-9 </dev/urandom | head -c 16)
+# Загружаем или генерируем новые credentials 3x-ui
+if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+    log "Загрузка существующих credentials 3x-ui из $CREDS_FILE..."
+    PANEL_PORT=$(grep "PANEL_URL" "$CREDS_FILE" | sed -e 's|.*:| |' -e 's|/.*||' | xargs || echo "2053")
+    PANEL_USER=$(grep "PANEL_USER" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    PANEL_PASS=$(grep "PANEL_PASS" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    PANEL_PATH=$(grep "PANEL_URL" "$CREDS_FILE" | sed -e 's|.*/\([^/]*\)/$|\1|' | xargs)
+fi
+
+# Если после загрузки переменные пустые, генерируем заново
+[ -z "$PANEL_PORT" ] && PANEL_PORT=2053
+[ -z "$PANEL_USER" ] && PANEL_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
+[ -z "$PANEL_PASS" ] && PANEL_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
+[ -z "$PANEL_PATH" ] && PANEL_PATH=$(tr -dc a-z0-9 </dev/urandom | head -c 16)
 
 if systemctl is-active --quiet x-ui 2>/dev/null && [ -f /etc/x-ui/x-ui.db ]; then
     warn "3x-ui уже установлен и работает. Пропускаем скрипт инсталляции."
@@ -163,6 +175,23 @@ else
     # Если инбаунд уже есть, пытаемся достать его ссылку (упрощенно)
     warn "Дефолтный инбаунд 3x-ui уже существует."
 fi
+
+# Создание TProxy инбаунда для AmneziaWG (если не существует)
+TPROXY_EXISTS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT count(*) FROM inbounds WHERE remark='TProxy-Inbound';")
+if [ "$TPROXY_EXISTS" -eq 0 ]; then
+    log "Создание TProxy инбаунда для каскадной маршрутизации..."
+    T_PORT=12345
+    T_SETTINGS="{\"network\": \"tcp,udp\", \"followControl\": true}"
+    T_STREAM="{\"network\": \"tcp\", \"security\": \"none\", \"sockopt\": {\"tproxy\": \"tproxy\", \"mark\": 1}}"
+    T_SNIFFING="{\"enabled\": true, \"destOverride\": [\"http\", \"tls\", \"quic\", \"fakedns\"]}"
+    sqlite3 /etc/x-ui/x-ui.db "INSERT INTO inbounds (remark, enable, port, protocol, settings, stream_settings, tag, sniffing, listen) VALUES ('TProxy-Inbound', 1, $T_PORT, 'dokodemo-door', '$T_SETTINGS', '$T_STREAM', 'tproxy-in', '$T_SNIFFING', '127.0.0.1');"
+fi
+
+# Настройка Xray DNS на AdGuardHome (через общие настройки панели)
+log "Связывание Xray DNS с AdGuardHome..."
+X_DNS="{\"servers\": [\"127.0.0.1:$ADG_DNS_PORT\", \"https://dns.google/dns-query\"], \"queryStrategy\": \"UseIP\"}"
+sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayDNSConfig', '$X_DNS');"
+
 systemctl restart x-ui
 
 # ==============================================================================
@@ -235,11 +264,13 @@ H2 = $H2
 H3 = $H3
 H4 = $H4
 
-# Правила NAT и маршрутизации (TPROXY опционален)
+# Правила NAT и маршрутизации (TPROXY активен)
 PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE
 # DNAT: перенаправляем DNS от VPN-клиентов (порт 53) -> AdGuardHome (порт $ADG_DNS_PORT)
 PostUp = iptables -t nat -A PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT
 PostUp = iptables -t nat -A PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT
+
+# TProxy Routing (REDIRECT AWG traffic to Xray)
 PostUp = ip rule add fwmark 1 table 100 2>/dev/null || true
 PostUp = ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 PostUp = iptables -t mangle -N AWG_TPROXY 2>/dev/null || true
@@ -247,11 +278,8 @@ PostUp = iptables -t mangle -F AWG_TPROXY
 PostUp = iptables -t mangle -A AWG_TPROXY -d 10.8.0.0/24 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d $SERVER_IP -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 127.0.0.0/8 -j RETURN
-# TPROXY выключен по умолчанию.
-# Для включения: раскомментируйте 2 строки ниже и закомментируйте RETURN.
-# PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
-# PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
-PostUp = iptables -t mangle -A AWG_TPROXY -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
+PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
 
 PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE 2>/dev/null || true
@@ -305,11 +333,20 @@ chmod 600 /root/amnezia_client.conf
 log "Установка AdGuardHome..."
 # DNS на случайном порту $ADG_DNS_PORT — systemd-resolved отключать не нужно
 
-# Генерируем новые credentials AdGuardHome при каждом запуске
-log "Генерация новых credentials AdGuardHome..."
-ADG_PORT=$(shuf -i 10000-65000 -n 1)
-ADG_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
-ADG_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
+# Загружаем или генерируем новые credentials AdGuardHome
+if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+    log "Загрузка существующих credentials AdGuardHome из $CREDS_FILE..."
+    ADG_PORT=$(grep "ADG_URL" "$CREDS_FILE" | sed -e 's|.*:| |' -e 's|/.*||' | xargs)
+    ADG_USER=$(grep "ADG_USER" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    ADG_PASS=$(grep "ADG_PASS" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    ADG_DNS_PORT=$(grep "ADG_DNS_PORT" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+fi
+
+# Если пустые, генерируем заново
+[ -z "$ADG_PORT" ] && ADG_PORT=$(shuf -i 10000-65000 -n 1)
+[ -z "$ADG_USER" ] && ADG_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
+[ -z "$ADG_PASS" ] && ADG_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
+[ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 command -v mkpasswd >/dev/null || apt install -y whois
 ADG_HASH=$(mkpasswd -m bcrypt "$ADG_PASS")
 
@@ -427,6 +464,27 @@ if ! ss -tlnp | grep -q ':2244'; then
         log "SSH порт 2244 активен"
     fi
 fi
+
+# Настройка Fail2Ban для панелей
+log "Настройка Fail2Ban (3x-ui & AGH)..."
+cat <<EOF > /etc/fail2ban/jail.d/vpn-bundle.local
+[x-ui]
+enabled = true
+port = $PANEL_PORT
+filter = nosuchfilter
+logpath = /var/log/vpn-setup.log
+maxretry = 5
+bantime = 1h
+
+[adguardhome]
+enabled = true
+port = $ADG_PORT
+filter = nosuchfilter
+logpath = /var/log/vpn-setup.log
+maxretry = 5
+bantime = 1h
+EOF
+systemctl restart fail2ban
 
 # ==============================================================================
 # 6. ОЧИСТКА И УДАЛЕНИЕ ИНСТРУМЕНТОВ СБОРКИ

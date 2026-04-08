@@ -55,7 +55,11 @@ graph TD
 ### 🛠️ Установка
 
 ```bash
+# Обычная установка (сохраняет существующие пароли при повторном запуске)
 curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
+
+# Установка с ротацией (сменой) всех паролей и портов
+curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
 ### 🧹 Удаление
@@ -108,7 +112,11 @@ graph TD
 ### 🛠️ Installation
 
 ```bash
+# Standard installation (preserves existing credentials when run again)
 curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
+
+# Installation with credential rotation (forced regeneration of all passwords/ports)
+curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
 ### 🧹 Uninstallation
