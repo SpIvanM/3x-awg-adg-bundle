@@ -1,5 +1,5 @@
 <!--
-Name: VPS Environment Setup Script
+Name: vps-vpn-triad (3x-ui + AWG + AdGuard)
 Description: Configures OS networking, 3x-ui, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
 Usage: sudo ./setup.sh
 Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard.
