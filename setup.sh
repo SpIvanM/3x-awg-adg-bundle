@@ -16,6 +16,7 @@ export RANDFILE=/tmp/.rnd
 SCRIPT_VERSION="1.1.0"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
+LAST_RUN_FILE="/root/.vpn-setup-last-run"
 
 exec > >(tee -a "$LOG_FILE") 2>&1
 
@@ -29,6 +30,16 @@ log() { echo -e "${GREEN}[INFO] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
 err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
 
+# Проверяем, запускался ли скрипт уже сегодня (для пропуска apt-операций)
+TODAY=$(date +%Y-%m-%d)
+LAST_RUN=$(cat "$LAST_RUN_FILE" 2>/dev/null || echo "")
+if [ "$LAST_RUN" = "$TODAY" ]; then
+    SKIP_APT=1
+    warn "Скрипт уже запускался сегодня ($TODAY). Пропускаем обновление OS (только перегенерация настроек)."
+else
+    SKIP_APT=0
+fi
+
 trap 'warn "Скрипт прерван! Проверьте состояние вручную. Лог: $LOG_FILE"' ERR INT TERM
 
 if [ "$EUID" -ne 0 ]; then
@@ -38,28 +49,38 @@ fi
 # ==============================================================================
 # 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
 # ==============================================================================
-log "Очистка устаревших репозиториев (удаление bullseye-backports)..."
-sed -i '/bullseye-backports/d' /etc/apt/sources.list
-rm -f /etc/apt/sources.list.d/*backports*.list 2>/dev/null || true
+if [ "$SKIP_APT" -eq 0 ]; then
+    log "Очистка устаревших репозиториев (удаление bullseye-backports)..."
+    sed -i '/bullseye-backports/d' /etc/apt/sources.list
+    rm -f /etc/apt/sources.list.d/*backports*.list 2>/dev/null || true
 
-log "Обновление системы и установка базовых пакетов..."
-apt update && apt upgrade -y
-# Устанавливаем инструменты сборки (build-essential, git, libelf-dev) для AmneziaWG.
-# Они будут удалены в конце скрипта для повышения безопасности.
-if grep -qi "ubuntu" /etc/os-release; then
-    LINUX_HEADERS="linux-headers-generic"
+    log "Обновление системы и установка базовых пакетов..."
+    apt update && apt upgrade -y
+    # Устанавливаем инструменты сборки (build-essential, git, libelf-dev) для AmneziaWG.
+    # Они будут удалены в конце скрипта для повышения безопасности.
+    if grep -qi "ubuntu" /etc/os-release; then
+        LINUX_HEADERS="linux-headers-generic"
+    else
+        LINUX_HEADERS="linux-headers-amd64"
+    fi
+
+    apt install -y curl wget git mc ufw fail2ban nano iptables iptables-persistent \
+                   build-essential dkms $LINUX_HEADERS jq openssl libmnl-dev sqlite3 libelf-dev whois qrencode
+    # Обновляем дату последнего полного запуска
+    date +%Y-%m-%d > "$LAST_RUN_FILE"
 else
-    LINUX_HEADERS="linux-headers-amd64"
+    log "Пропуск apt-операций (fast mode). Убеждаемся в наличии jq и openssl..."
+    command -v jq >/dev/null 2>&1 || apt install -y jq
+    command -v openssl >/dev/null 2>&1 || apt install -y openssl
 fi
 
-apt install -y curl wget git mc ufw fail2ban nano iptables iptables-persistent \
-               build-essential dkms $LINUX_HEADERS jq openssl libmnl-dev sqlite3 libelf-dev whois qrencode
-
-log "Настройка редактора mcedit по умолчанию..."
-update-alternatives --set editor /usr/bin/mcedit || true
-export EDITOR=mcedit
-if ! grep -q "export EDITOR=mcedit" ~/.bashrc; then
-    echo 'export EDITOR=mcedit' >> ~/.bashrc
+if [ "$SKIP_APT" -eq 0 ]; then
+    log "Настройка редактора mcedit по умолчанию..."
+    update-alternatives --set editor /usr/bin/mcedit || true
+    export EDITOR=mcedit
+    if ! grep -q "export EDITOR=mcedit" ~/.bashrc; then
+        echo 'export EDITOR=mcedit' >> ~/.bashrc
+    fi
 fi
 
 log "Оптимизация sysctl (сеть, BBR, лимиты)..."
@@ -90,19 +111,12 @@ log "Проверка и установка 3x-ui..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
 
-# Пытаемся загрузить старые credentials, чтобы сохранить порты и пароли
-if [ -f "$CREDS_FILE" ]; then
-    log "Найдена существующая конфигурация, загружаем данные..."
-    PANEL_PORT=$(grep "PANEL_URL=" "$CREDS_FILE" | grep -Po ':\K([0-9]+)')
-    PANEL_USER=$(grep "PANEL_USER=" "$CREDS_FILE" | cut -d'=' -f2)
-    PANEL_PASS=$(grep "PANEL_PASS=" "$CREDS_FILE" | cut -d'=' -f2)
-    PANEL_PATH=$(grep "PANEL_URL=" "$CREDS_FILE" | grep -Po ':[0-9]+/\K([^/]+)')
-fi
-
-: "${PANEL_PORT:=2053}"
-: "${PANEL_USER:=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)}"
-: "${PANEL_PASS:=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)}"
-: "${PANEL_PATH:=$(tr -dc a-z0-9 </dev/urandom | head -c 16)}"
+# Генерируем новые credentials 3x-ui при каждом запуске
+log "Генерация новых credentials 3x-ui..."
+PANEL_PORT=2053
+PANEL_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
+PANEL_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
+PANEL_PATH=$(tr -dc a-z0-9 </dev/urandom | head -c 16)
 
 if systemctl is-active --quiet x-ui 2>/dev/null && [ -f /etc/x-ui/x-ui.db ]; then
     warn "3x-ui уже установлен и работает. Пропускаем скрипт инсталляции."
@@ -293,28 +307,25 @@ if systemctl is-active --quiet systemd-resolved; then
     systemctl restart systemd-resolved
 fi
 
-if systemctl is-active --quiet AdGuardHome 2>/dev/null && [ -f /opt/AdGuardHome/AdGuardHome.yaml ]; then
-    warn "AdGuardHome уже установлен и работает."
+# Генерируем новые credentials AdGuardHome при каждом запуске
+log "Генерация новых credentials AdGuardHome..."
+ADG_PORT=$(shuf -i 10000-65000 -n 1)
+ADG_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
+ADG_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
+command -v mkpasswd >/dev/null || apt install -y whois
+ADG_HASH=$(mkpasswd -m bcrypt "$ADG_PASS")
+
+# Устанавливаем AdGuardHome только если бинарника нет
+if [ ! -f "/opt/AdGuardHome/AdGuardHome" ]; then
+    log "Установка AdGuardHome..."
+    curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
 else
-    if [ ! -f "/opt/AdGuardHome/AdGuardHome" ]; then
-        curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
-    fi
+    warn "AdGuardHome бинарник уже существует, пропуск установки."
+fi
 
-    # Пытаемся сохранить старые креды AGH
-    if [ -f "$CREDS_FILE" ]; then
-        ADG_PORT=$(grep "ADG_URL=" "$CREDS_FILE" | grep -Po ':\K([0-9]+)')
-        ADG_USER=$(grep "ADG_USER=" "$CREDS_FILE" | cut -d'=' -f2)
-        ADG_PASS=$(grep "ADG_PASS=" "$CREDS_FILE" | cut -d'=' -f2)
-    fi
-
-    : "${ADG_PORT:=$(shuf -i 10000-65000 -n 1)}"
-    : "${ADG_USER:=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)}"
-    : "${ADG_PASS:=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)}"
-    
-    command -v mkpasswd >/dev/null || apt install -y whois
-    ADG_HASH=$(mkpasswd -m bcrypt "$ADG_PASS")
-
-    cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
+# Всегда перезаписываем конфиг (новые порт, логин, пароль)
+log "Применение конфигурации AdGuardHome..."
+cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
 bind_host: 0.0.0.0
 bind_port: $ADG_PORT
 users:
@@ -350,16 +361,15 @@ filters:
     id: 2
 EOF
 
-    # Гарантируем запуск AdGuardHome ПОСЛЕ awg0 (нужен 10.8.0.1 для bind)
-    mkdir -p /etc/systemd/system/AdGuardHome.service.d
-    cat <<OVERRIDE > /etc/systemd/system/AdGuardHome.service.d/after-awg.conf
+# Гарантируем запуск AdGuardHome ПОСЛЕ awg0 (нужен 10.8.0.1 для bind)
+mkdir -p /etc/systemd/system/AdGuardHome.service.d
+cat <<OVERRIDE > /etc/systemd/system/AdGuardHome.service.d/after-awg.conf
 [Unit]
 After=awg-quick@awg0.service
 Requires=awg-quick@awg0.service
 OVERRIDE
-    systemctl daemon-reload
-    systemctl restart AdGuardHome
-fi
+systemctl daemon-reload
+systemctl restart AdGuardHome
 
 # ==============================================================================
 # 5. НАСТРОЙКА SSH И ФАЕРВОЛА
@@ -402,12 +412,16 @@ fi
 # 6. ОЧИСТКА И УДАЛЕНИЕ ИНСТРУМЕНТОВ СБОРКИ
 # ==============================================================================
 log "Удаление инструментов сборки (Hardening) и очистка кэша..."
-# Удаляем пакеты сборки (dkms оставляем для пересборки модуля при обновлении ядра)
-apt purge -y git build-essential libelf-dev libmnl-dev > /dev/null 2>&1 || true
-apt autoremove -y > /dev/null 2>&1
-apt clean
-rm -rf /usr/src/amneziawg-linux-kernel-module
-rm -rf /usr/src/amneziawg-tools
+if [ "$SKIP_APT" -eq 0 ]; then
+    # Удаляем пакеты сборки (dkms оставляем для пересборки модуля при обновлении ядра)
+    apt purge -y git build-essential libelf-dev libmnl-dev > /dev/null 2>&1 || true
+    apt autoremove -y > /dev/null 2>&1
+    apt clean
+    rm -rf /usr/src/amneziawg-linux-kernel-module
+    rm -rf /usr/src/amneziawg-tools
+else
+    log "Пропуск очистки apt (fast mode)."
+fi
 
 # ==============================================================================
 # 7. СОХРАНЕНИЕ CREDENTIALS И ФИНАЛЬНЫЙ ВЫВОД
