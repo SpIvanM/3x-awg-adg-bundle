@@ -86,36 +86,45 @@ sysctl --system > /dev/null
 # ==============================================================================
 # 2. УСТАНОВКА 3X-UI
 # ==============================================================================
-log "Установка 3x-ui..."
+log "Проверка и установка 3x-ui..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-PANEL_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
-PANEL_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
-PANEL_PORT=2053
-PANEL_PATH=$(tr -dc a-z0-9 </dev/urandom | head -c 16)
 
-# Автоматизируем ответы на запросы инсталлятора 3x-ui
-if systemctl is-active --quiet x-ui 2>/dev/null; then
-    warn "3x-ui уже установлен и работает, пропускаем установку..."
+# Пытаемся загрузить старые credentials, чтобы сохранить порты и пароли
+if [ -f "$CREDS_FILE" ]; then
+    log "Найдена существующая конфигурация, загружаем данные..."
+    PANEL_PORT=$(grep "PANEL_URL=" "$CREDS_FILE" | grep -Po ':\K([0-9]+)')
+    PANEL_USER=$(grep "PANEL_USER=" "$CREDS_FILE" | cut -d'=' -f2)
+    PANEL_PASS=$(grep "PANEL_PASS=" "$CREDS_FILE" | cut -d'=' -f2)
+    PANEL_PATH=$(grep "PANEL_URL=" "$CREDS_FILE" | grep -Po ':[0-9]+/\K([^/]+)')
+fi
+
+: "${PANEL_PORT:=2053}"
+: "${PANEL_USER:=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)}"
+: "${PANEL_PASS:=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)}"
+: "${PANEL_PATH:=$(tr -dc a-z0-9 </dev/urandom | head -c 16)}"
+
+if systemctl is-active --quiet x-ui 2>/dev/null && [ -f /etc/x-ui/x-ui.db ]; then
+    warn "3x-ui уже установлен и работает. Пропускаем скрипт инсталляции."
 else
+    log "Запуск инсталлятора 3x-ui..."
     bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
 y
 ${PANEL_USER}
 ${PANEL_PASS}
 ${PANEL_PORT}
 EOF
+    # Ожидание инициализации БД 3x-ui (до 10 секунд)
+    for i in $(seq 1 10); do [ -f /etc/x-ui/x-ui.db ] && break; sleep 1; done
+    [ -f /etc/x-ui/x-ui.db ] || err "БД 3x-ui не создана"
+fi
 
-    # Ожидание инициализации БД 3x-ui (до 30 секунд)
-    for i in $(seq 1 30); do
-        [ -f /etc/x-ui/x-ui.db ] && break
-        sleep 1
-    done
-    [ -f /etc/x-ui/x-ui.db ] || err "БД 3x-ui не создана за 30 секунд"
+# Применение защитного пути в БД 3x-ui (даже если установлен, обновляем путь)
+sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '/${PANEL_PATH}/');"
 
-    # Применение защитного пути в БД 3x-ui (используем INSERT OR REPLACE для надежности)
-    sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '/${PANEL_PATH}/');"
-    
-    # Создание дефолтного входящего соединения (VLESS + Reality)
+# Проверяем, есть ли уже инбаунды, чтобы не создавать дубликаты
+INBOUND_EXISTS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT count(*) FROM inbounds WHERE remark='VLESS-Reality-Default';")
+if [ "$INBOUND_EXISTS" -eq 0 ]; then
     log "Создание дефолтного VLESS-Reality инбаунда..."
     XRAY_BIN="/usr/local/x-ui/bin/xray"
     if [ -f "$XRAY_BIN" ]; then
@@ -136,35 +145,42 @@ EOF
     else
         warn "Бинарный файл xray не найден, пропуск создания инбаунда."
     fi
-
-    systemctl restart x-ui
+else
+    # Если инбаунд уже есть, пытаемся достать его ссылку (упрощенно)
+    warn "Дефолтный инбаунд 3x-ui уже существует."
 fi
+systemctl restart x-ui
 
 # ==============================================================================
 # 3. УСТАНОВКА AMNEZIAWG
 # ==============================================================================
-log "Установка AmneziaWG..."
-if grep -qi "ubuntu" /etc/os-release; then
-    log "Используем PPA для Ubuntu..."
-    apt install -y software-properties-common python3-launchpadlib gnupg2
-    add-apt-repository -y ppa:amnezia/ppa
-    apt update
-    apt install -y amneziawg
+log "Проверка AmneziaWG..."
+if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
+    warn "AmneziaWG уже настроен, пропускаем переустановку."
 else
-    log "Сборка AmneziaWG Kernel Module и Tools из исходников (Debian)..."
-    (
-        cd /usr/src
-        rm -rf amneziawg-linux-kernel-module amneziawg-tools
-        git clone https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
-        cd amneziawg-linux-kernel-module/src
-        make dkms-install || make install
-    )
-    (
-        cd /usr/src
-        git clone https://github.com/amnezia-vpn/amneziawg-tools.git
-        cd amneziawg-tools/src
-        make install
-    )
+    if grep -qi "ubuntu" /etc/os-release; then
+        log "Используем PPA для Ubuntu..."
+        apt install -y software-properties-common python3-launchpadlib gnupg2
+        add-apt-repository -y ppa:amnezia/ppa
+        apt update
+        apt install -y amneziawg
+    else
+        log "Сборка AmneziaWG из исходников (Debian)..."
+        (
+            cd /usr/src
+            rm -rf amneziawg-linux-kernel-module amneziawg-tools
+            git clone https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
+            cd amneziawg-linux-kernel-module/src
+            make dkms-install || make install
+        )
+        (
+            cd /usr/src
+            rm -rf amneziawg-tools
+            git clone https://github.com/amnezia-vpn/amneziawg-tools.git
+            cd amneziawg-tools/src
+            make install
+        )
+    fi
 fi
 log "Генерация ключей и конфигурации AmneziaWG..."
 mkdir -p /etc/amnezia/amneziawg
@@ -277,18 +293,28 @@ if systemctl is-active --quiet systemd-resolved; then
     systemctl restart systemd-resolved
 fi
 
-if [ ! -f "/opt/AdGuardHome/AdGuardHome" ]; then
-    curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
-fi
+if systemctl is-active --quiet AdGuardHome 2>/dev/null && [ -f /opt/AdGuardHome/AdGuardHome.yaml ]; then
+    warn "AdGuardHome уже установлен и работает."
+else
+    if [ ! -f "/opt/AdGuardHome/AdGuardHome" ]; then
+        curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+    fi
 
-systemctl stop AdGuardHome || true
-ADG_PORT=$(shuf -i 10000-65000 -n 1)
-ADG_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
-ADG_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
-command -v mkpasswd >/dev/null || err "mkpasswd не найден (пакет whois)"
-ADG_HASH=$(mkpasswd -m bcrypt "$ADG_PASS")
+    # Пытаемся сохранить старые креды AGH
+    if [ -f "$CREDS_FILE" ]; then
+        ADG_PORT=$(grep "ADG_URL=" "$CREDS_FILE" | grep -Po ':\K([0-9]+)')
+        ADG_USER=$(grep "ADG_USER=" "$CREDS_FILE" | cut -d'=' -f2)
+        ADG_PASS=$(grep "ADG_PASS=" "$CREDS_FILE" | cut -d'=' -f2)
+    fi
 
-cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
+    : "${ADG_PORT:=$(shuf -i 10000-65000 -n 1)}"
+    : "${ADG_USER:=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)}"
+    : "${ADG_PASS:=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)}"
+    
+    command -v mkpasswd >/dev/null || apt install -y whois
+    ADG_HASH=$(mkpasswd -m bcrypt "$ADG_PASS")
+
+    cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
 bind_host: 0.0.0.0
 bind_port: $ADG_PORT
 users:
@@ -324,25 +350,29 @@ filters:
     id: 2
 EOF
 
-# Гарантируем запуск AdGuardHome ПОСЛЕ awg0 (нужен 10.8.0.1 для bind)
-mkdir -p /etc/systemd/system/AdGuardHome.service.d
-cat <<OVERRIDE > /etc/systemd/system/AdGuardHome.service.d/after-awg.conf
+    # Гарантируем запуск AdGuardHome ПОСЛЕ awg0 (нужен 10.8.0.1 для bind)
+    mkdir -p /etc/systemd/system/AdGuardHome.service.d
+    cat <<OVERRIDE > /etc/systemd/system/AdGuardHome.service.d/after-awg.conf
 [Unit]
 After=awg-quick@awg0.service
 Requires=awg-quick@awg0.service
 OVERRIDE
-systemctl daemon-reload
-systemctl start AdGuardHome
+    systemctl daemon-reload
+    systemctl restart AdGuardHome
+fi
 
 # ==============================================================================
 # 5. НАСТРОЙКА SSH И ФАЕРВОЛА
 # ==============================================================================
 log "Настройка UFW..."
-ufw --force reset
-ufw default deny incoming
+if ss -tlnp | grep -q ':2244'; then
+    warn "SSH уже на порту 2244, настраиваем правила для него."
+    ufw allow 2244/tcp 2>/dev/null || true
+else
+    ufw allow 22/tcp 2>/dev/null || true
+fi
+
 ufw default allow outgoing
-ufw allow 22/tcp
-ufw allow 2244/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
 ufw allow ${ADG_PORT}/tcp
@@ -353,18 +383,19 @@ ufw allow in on awg0 to 10.8.0.1 port 53
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
 
-log "Изменение порта SSH на 2244..."
-sed -i '/^#\?Port /d' /etc/ssh/sshd_config
-echo "Port 2244" >> /etc/ssh/sshd_config
-mkdir -p /etc/ssh/sshd_config.d
-echo "Port 2244" > /etc/ssh/sshd_config.d/custom_port.conf 2>/dev/null || true
-systemctl restart sshd
-sleep 2
-if ss -tlnp | grep -q ':2244'; then
-    ufw delete allow 22/tcp >/dev/null 2>&1 || true
-    log "SSH порт 22 закрыт, порт 2244 активен"
-else
-    warn "SSH на порту 2244 не обнаружен! Порт 22 оставлен открытым для безопасности."
+if ! ss -tlnp | grep -q ':2244'; then
+    log "Изменение порта SSH на 2244..."
+    sed -i '/^#\?Port /d' /etc/ssh/sshd_config
+    echo "Port 2244" >> /etc/ssh/sshd_config
+    mkdir -p /etc/ssh/sshd_config.d
+    echo "Port 2244" > /etc/ssh/sshd_config.d/custom_port.conf 2>/dev/null || true
+    systemctl restart sshd
+    sleep 2
+    if ss -tlnp | grep -q ':2244'; then
+        ufw allow 2244/tcp 2>/dev/null || true
+        ufw delete allow 22/tcp 2>/dev/null || true
+        log "SSH порт 2244 активен"
+    fi
 fi
 
 # ==============================================================================

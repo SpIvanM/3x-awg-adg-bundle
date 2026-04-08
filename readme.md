@@ -16,14 +16,15 @@ Stability: Do not wrap HTML anchors/spans in backticks; keep IDs inside headers.
 
 ## <span id="russian"></span>🇷🇺 Русский
 
-**Комплексный VPN-бандл** для автоматической инициализации и защиты VPS.
-Объединяет **3x-ui**, **AmneziaWG** и **AdGuardHome**.
+**Комплексный VPN-бандл** для автоматической инициализации и защиты VPS.  
+Объединяет **3x-ui**, **AmneziaWG** и **AdGuardHome** в одну экосистему.
 
-### Состав
+### Особенности
 
-- **3x-ui**: Управление Xray прокси.
-- **AmneziaWG**: VPN с обфускацией (защита от DPI).
-- **AdGuardHome**: DNS-фильтрация и блокировка рекламы.
+- **Идемпотентность**: Скрипт можно запускать повторно. Он подхватит существующие пароли/порты и не будет переустанавливать то, что уже работает.
+- **DPI Protection**: AmneziaWG с настроенными параметрами обфускации (защита от блокировок ТСПУ).
+- **DNS Security**: AdGuardHome блокирует рекламу и трекеры. Включен **Безопасный поиск** (Google, YT, Yandex).
+- **Auto-Config**: Автоматическое создание VLESS-Reality инбаунда и AmneziaWG конфига с QR-кодом.
 
 ### Поддерживаемые ОС
 
@@ -38,26 +39,33 @@ Stability: Do not wrap HTML anchors/spans in backticks; keep IDs inside headers.
 curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
-### После установки
+### Удаление
 
-**ВАЖНО: Обязательно выполните перезагрузку:**
+Если нужно полностью очистить сервер:
 
 ```bash
-sudo reboot
+curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/uninstall.sh | sudo bash
 ```
+
+### Важно
+
+- **Рестарт**: После первой установки обязателен `sudo reboot`.
+- **Доступ**: Все пароли и ссылки сохраняются в файле `/root/.vpn-credentials`.
+- **SSH**: Порт меняется на **2244**.
 
 ---
 
 ## <span id="english"></span>🇺🇸 English
 
-**Comprehensive VPN bundle** for automated VPS initialization and security.
-Combines **3x-ui**, **AmneziaWG**, and **AdGuardHome**.
+**Comprehensive VPN bundle** for automated VPS initialization and security.  
+Integrates **3x-ui**, **AmneziaWG**, and **AdGuardHome** into a single ecosystem.
 
-### Components
+### Features
 
-- **3x-ui**: Xray proxy management.
-- **AmneziaWG**: VPN with obfuscation (DPI protection).
-- **AdGuardHome**: DNS filtering and ad blocking.
+- **Idempotency**: The script can be run multiple times safely. It preserves existing credentials/ports and skips already installed components.
+- **DPI Protection**: AmneziaWG with pre-configured obfuscation parameters to bypass DPI filters.
+- **DNS Security**: AdGuardHome for ad-blocking and tracking protection. **SafeSearch** is enabled (Google, YT, Yandex).
+- **Auto-Config**: Automatic creation of VLESS-Reality inbound and AmneziaWG config with QR code.
 
 ### Supported OS
 
@@ -72,12 +80,16 @@ Run a single command for a complete installation:
 curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
-### After Installation
+### Uninstallation
 
-**IMPORTANT: A reboot is mandatory:**
+To completely remove all components from the server:
 
 ```bash
-sudo reboot
+curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/uninstall.sh | sudo bash
 ```
 
----
+### Important
+
+- **Reboot**: A `sudo reboot` is mandatory after the initial installation.
+- **Credentials**: All passwords and links are stored in `/root/.vpn-credentials`.
+- **SSH**: The default port is changed to **2244**.
