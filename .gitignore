@@ -1,0 +1,7 @@
+# Name: Git Ignore File
+# Description: Excludes metadata sidecars, reports, and temporary project files.
+*.meta.md
+*.txt
+.gemini/
+.sandbox/
+.tmp/
