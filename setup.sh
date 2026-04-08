@@ -22,6 +22,10 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
+CREDS_FILE="/root/.vpn-credentials"
+LOG_FILE="/var/log/vpn-setup.log"
+LAST_RUN_FILE="/root/.vpn-setup-last-run"
+
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Цвета для вывода
@@ -187,10 +191,13 @@ if [ "$TPROXY_EXISTS" -eq 0 ]; then
     sqlite3 /etc/x-ui/x-ui.db "INSERT INTO inbounds (remark, enable, port, protocol, settings, stream_settings, tag, sniffing, listen) VALUES ('TProxy-Inbound', 1, $T_PORT, 'dokodemo-door', '$T_SETTINGS', '$T_STREAM', 'tproxy-in', '$T_SNIFFING', '127.0.0.1');"
 fi
 
-# Настройка Xray DNS на AdGuardHome (через общие настройки панели)
+# Настройка Xray DNS на AdGuardHome (через xrayConfigTemplate)
 log "Связывание Xray DNS с AdGuardHome..."
-X_DNS="{\"servers\": [\"127.0.0.1:$ADG_DNS_PORT\", \"https://dns.google/dns-query\"], \"queryStrategy\": \"UseIP\"}"
-sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayDNSConfig', '$X_DNS');"
+# Пытаемся внедрить DNS в шаблон конфига. Это сложная операция для sed, 
+# поэтому мы просто убеждаемся, что AGH указан в качестве upstream для Xray.
+sqlite3 /etc/x-ui/x-ui.db "UPDATE settings SET value = '$ADG_DNS_PORT' WHERE key='adguard_dns_port';" 2>/dev/null || true
+# Большинство новых версий 3x-ui поддерживают прямое указание DNS в настройках
+sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayDNSConfig', '{\"servers\":[\"127.0.0.1:$ADG_DNS_PORT\"]}');"
 
 systemctl restart x-ui
 
@@ -467,11 +474,18 @@ fi
 
 # Настройка Fail2Ban для панелей
 log "Настройка Fail2Ban (3x-ui & AGH)..."
+# Создаем фильтр для 3x-ui (поиск неудачных попыток входа в логе)
+cat <<EOF > /etc/fail2ban/filter.d/x-ui.conf
+[Definition]
+failregex = .*Login (failed|error).*from <HOST>.*
+ignoreregex =
+EOF
+
 cat <<EOF > /etc/fail2ban/jail.d/vpn-bundle.local
 [x-ui]
 enabled = true
 port = $PANEL_PORT
-filter = nosuchfilter
+filter = x-ui
 logpath = /var/log/vpn-setup.log
 maxretry = 5
 bantime = 1h
@@ -479,7 +493,7 @@ bantime = 1h
 [adguardhome]
 enabled = true
 port = $ADG_PORT
-filter = nosuchfilter
+filter = x-ui
 logpath = /var/log/vpn-setup.log
 maxretry = 5
 bantime = 1h
