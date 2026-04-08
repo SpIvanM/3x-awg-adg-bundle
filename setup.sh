@@ -80,6 +80,7 @@ sysctl --system > /dev/null
 # ==============================================================================
 log "Установка 3x-ui..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
+PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
 PANEL_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
 PANEL_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
 PANEL_PORT=2053
@@ -158,18 +159,22 @@ H2 = $H2
 H3 = $H3
 H4 = $H4
 
-# Правила маршрутизации AWG -> 3x-ui (TPROXY)
+# Правила NAT и маршрутизации (TPROXY опционален)
+PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE
 PostUp = ip rule add fwmark 1 table 100 2>/dev/null || true
 PostUp = ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
-PostUp = iptables -t mangle -F AWG_TPROXY 2>/dev/null || true
-PostUp = iptables -t mangle -X AWG_TPROXY 2>/dev/null || true
-PostUp = iptables -t mangle -N AWG_TPROXY
-PostUp = iptables -t mangle -A AWG_TPROXY -d 10.8.0.1/32 -j RETURN
+PostUp = iptables -t mangle -N AWG_TPROXY 2>/dev/null || true
+PostUp = iptables -t mangle -F AWG_TPROXY
+PostUp = iptables -t mangle -A AWG_TPROXY -d 10.8.0.0/24 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d $SERVER_IP -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 127.0.0.0/8 -j RETURN
+# TPROXY выключен по умолчанию (раскомментируйте строки ниже при настройке 3x-ui на порт 12345)
+PostUp = iptables -t mangle -A AWG_TPROXY -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
 
+PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE 2>/dev/null || true
 PostDown = iptables -t mangle -D PREROUTING -i awg0 -j AWG_TPROXY 2>/dev/null || true
 PostDown = iptables -t mangle -F AWG_TPROXY 2>/dev/null || true
 PostDown = iptables -t mangle -X AWG_TPROXY 2>/dev/null || true
@@ -215,6 +220,12 @@ EOF
 # 4. УСТАНОВКА И НАСТРОЙКА ADGUARD HOME
 # ==============================================================================
 log "Установка AdGuardHome..."
+if systemctl is-active --quiet systemd-resolved; then
+    warn "Освобождение порта 53 (отключение systemd-resolved stub)..."
+    sed -i 's/#\?DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
+    systemctl restart systemd-resolved
+fi
+
 if [ ! -f "/opt/AdGuardHome/AdGuardHome" ]; then
     curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
 fi
