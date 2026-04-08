@@ -289,14 +289,14 @@ command -v mkpasswd >/dev/null || err "mkpasswd не найден (пакет wh
 ADG_HASH=$(mkpasswd -m bcrypt "$ADG_PASS")
 
 cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
-bind_host: 10.8.0.1
+bind_host: 0.0.0.0
 bind_port: $ADG_PORT
 users:
   - name: $ADG_USER
     password: $ADG_HASH
 dns:
   bind_hosts:
-    - 10.8.0.1
+    - 0.0.0.0
   port: 53
   upstream_dns:
     - https://dns.cloudflare.com/dns-query
@@ -304,6 +304,15 @@ dns:
   bootstrap_dns:
     - 1.1.1.1
     - 8.8.8.8
+filtering:
+  safe_search:
+    enabled: true
+    google: true
+    bing: true
+    youtube: true
+    yandex: true
+    duckduckgo: true
+    pixabay: true
 filters:
   - enabled: true
     url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt
@@ -393,7 +402,7 @@ echo -e "${GREEN}SSH доступ:${RESET}"
 echo -e "Порт: ${YELLOW}2244${RESET}"
 
 echo -e "\n${GREEN}Панель 3x-ui:${RESET}"
-echo -e "URL: ${YELLOW}http://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET}"
+echo -e "URL: ${YELLOW}http://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET} ${RED}(ВНИМАНИЕ: Только HTTP, последний слэш обязателен!)${RESET}"
 echo -e "User: ${YELLOW}${PANEL_USER}${RESET} / Pass: ${YELLOW}${PANEL_PASS}${RESET}"
 
 if [ ! -z "$VLESS_LINK" ]; then
@@ -402,12 +411,18 @@ if [ ! -z "$VLESS_LINK" ]; then
 fi
 
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
-echo -e "URL: ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
+echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
+echo -e "DNS-сервер (UDP): ${YELLOW}10.8.0.1${RESET} (Стандартный порт 53)"
 echo -e "User: ${YELLOW}${ADG_USER}${RESET} / Pass: ${YELLOW}${ADG_PASS}${RESET}"
+echo -e "Безопасный поиск: ${GREEN}ВКЛЮЧЕН${RESET}"
 
 echo -e "\n${GREEN}AmneziaWG:${RESET}"
 echo -e "Конфиг сохранен в: ${YELLOW}/root/amnezia_client.conf${RESET}"
-echo -e "QR-код для мобильного клиента:"
+echo -e "${YELLOW}--- СОДЕРЖИМОЕ CONFIG-ФАЙЛА (для копирования) ---${RESET}"
+cat /root/amnezia_client.conf
+echo -e "${YELLOW}--- КОНЕЦ КОНФИГА ---${RESET}"
+
+echo -e "\nQR-код для мобильного клиента:"
 qrencode -t ansiutf8 < /root/amnezia_client.conf
 
 echo -e "\n${GREEN}Все credentials сохранены:${RESET} ${YELLOW}${CREDS_FILE}${RESET}"
