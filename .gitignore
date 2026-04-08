@@ -1,5 +1,5 @@
-# Name: Git Ignore File
-# Description: Excludes metadata sidecars, reports, and temporary project files.
+# Name: Git Ignore
+# Description: Excludes sidecars and temp files.
 *.meta.md
 *.txt
 .gemini/
