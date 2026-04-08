@@ -13,6 +13,12 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
+SCRIPT_VERSION="1.1.0"
+CREDS_FILE="/root/.vpn-credentials"
+LOG_FILE="/var/log/vpn-setup.log"
+
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 # Цвета для вывода
 GREEN="\e[32m"
 RED="\e[31m"
@@ -22,6 +28,8 @@ RESET="\e[0m"
 log() { echo -e "${GREEN}[INFO] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
 err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
+
+trap 'warn "Скрипт прерван! Проверьте состояние вручную. Лог: $LOG_FILE"' ERR INT TERM
 
 if [ "$EUID" -ne 0 ]; then
   err "Запустите скрипт от имени root (sudo -i)"
@@ -87,19 +95,27 @@ PANEL_PORT=2053
 PANEL_PATH=$(tr -dc a-z0-9 </dev/urandom | head -c 16)
 
 # Автоматизируем ответы на запросы инсталлятора 3x-ui
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
+if systemctl is-active --quiet x-ui 2>/dev/null; then
+    warn "3x-ui уже установлен и работает, пропускаем установку..."
+else
+    bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
 y
 ${PANEL_USER}
 ${PANEL_PASS}
 ${PANEL_PORT}
 EOF
 
-# Ожидание инициализации БД 3x-ui
-sleep 5
+    # Ожидание инициализации БД 3x-ui (до 30 секунд)
+    for i in $(seq 1 30); do
+        [ -f /etc/x-ui/x-ui.db ] && break
+        sleep 1
+    done
+    [ -f /etc/x-ui/x-ui.db ] || err "БД 3x-ui не создана за 30 секунд"
 
-# Применение защитного пути в БД 3x-ui (используем INSERT OR REPLACE для надежности)
-sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '/${PANEL_PATH}/');"
-systemctl restart x-ui
+    # Применение защитного пути в БД 3x-ui (используем INSERT OR REPLACE для надежности)
+    sqlite3 /etc/x-ui/x-ui.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('webBasePath', '/${PANEL_PATH}/');"
+    systemctl restart x-ui
+fi
 
 # ==============================================================================
 # 3. УСТАНОВКА AMNEZIAWG
@@ -113,17 +129,19 @@ if grep -qi "ubuntu" /etc/os-release; then
     apt install -y amneziawg
 else
     log "Сборка AmneziaWG Kernel Module и Tools из исходников (Debian)..."
-    cd /usr/src
-    rm -rf amneziawg-linux-kernel-module amneziawg-tools
-    git clone https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
-    cd amneziawg-linux-kernel-module/src
-    make dkms-install || make install
-
-    cd /usr/src
-    git clone https://github.com/amnezia-vpn/amneziawg-tools.git
-    cd amneziawg-tools/src
-    make install
-    cd /root
+    (
+        cd /usr/src
+        rm -rf amneziawg-linux-kernel-module amneziawg-tools
+        git clone https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
+        cd amneziawg-linux-kernel-module/src
+        make dkms-install || make install
+    )
+    (
+        cd /usr/src
+        git clone https://github.com/amnezia-vpn/amneziawg-tools.git
+        cd amneziawg-tools/src
+        make install
+    )
 fi
 log "Генерация ключей и конфигурации AmneziaWG..."
 mkdir -p /etc/amnezia/amneziawg
@@ -171,10 +189,11 @@ PostUp = iptables -t mangle -F AWG_TPROXY
 PostUp = iptables -t mangle -A AWG_TPROXY -d 10.8.0.0/24 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d $SERVER_IP -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 127.0.0.0/8 -j RETURN
-# TPROXY выключен по умолчанию (раскомментируйте строки ниже при настройке 3x-ui на порт 12345)
+# TPROXY выключен по умолчанию.
+# Для включения: раскомментируйте 2 строки ниже и закомментируйте RETURN.
+# PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
+# PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A AWG_TPROXY -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
-PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
 
 PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE 2>/dev/null || true
@@ -218,6 +237,7 @@ Endpoint = $SERVER_IP:$AWG_PORT
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF
+chmod 600 /root/amnezia_client.conf
 
 # ==============================================================================
 # 4. УСТАНОВКА И НАСТРОЙКА ADGUARD HOME
@@ -237,17 +257,18 @@ systemctl stop AdGuardHome || true
 ADG_PORT=$(shuf -i 10000-65000 -n 1)
 ADG_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
 ADG_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
+command -v mkpasswd >/dev/null || err "mkpasswd не найден (пакет whois)"
 ADG_HASH=$(mkpasswd -m bcrypt "$ADG_PASS")
 
 cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
-bind_host: 0.0.0.0
+bind_host: 10.8.0.1
 bind_port: $ADG_PORT
 users:
   - name: $ADG_USER
     password: $ADG_HASH
 dns:
   bind_hosts:
-    - 0.0.0.0
+    - 10.8.0.1
   port: 53
   upstream_dns:
     - https://dns.cloudflare.com/dns-query
@@ -255,6 +276,15 @@ dns:
   bootstrap_dns:
     - 1.1.1.1
     - 8.8.8.8
+filters:
+  - enabled: true
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt
+    name: AdGuard DNS filter
+    id: 1
+  - enabled: true
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt
+    name: AdAway Default Blocklist
+    id: 2
 EOF
 systemctl start AdGuardHome
 
@@ -269,11 +299,9 @@ ufw allow 22/tcp
 ufw allow 2244/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
-ufw allow $ADG_PORT/tcp
-ufw allow 53/tcp
-ufw allow 53/udp
-ufw allow 2053/tcp
-ufw allow 51820/udp
+ufw allow ${ADG_PORT}/tcp
+ufw allow ${PANEL_PORT}/tcp
+ufw allow ${AWG_PORT}/udp
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
 
@@ -283,22 +311,43 @@ echo "Port 2244" >> /etc/ssh/sshd_config
 mkdir -p /etc/ssh/sshd_config.d
 echo "Port 2244" > /etc/ssh/sshd_config.d/custom_port.conf 2>/dev/null || true
 systemctl restart sshd
-ufw delete allow 22/tcp >/dev/null 2>&1 || true
+sleep 2
+if ss -tlnp | grep -q ':2244'; then
+    ufw delete allow 22/tcp >/dev/null 2>&1 || true
+    log "SSH порт 22 закрыт, порт 2244 активен"
+else
+    warn "SSH на порту 2244 не обнаружен! Порт 22 оставлен открытым для безопасности."
+fi
 
 # ==============================================================================
 # 6. ОЧИСТКА И УДАЛЕНИЕ ИНСТРУМЕНТОВ СБОРКИ
 # ==============================================================================
 log "Удаление инструментов сборки (Hardening) и очистка кэша..."
-# Удаляем тяжелые пакеты, которые больше не нужны для работы прокси
-apt purge -y git > /dev/null 2>&1 || true
+# Удаляем пакеты сборки (dkms оставляем для пересборки модуля при обновлении ядра)
+apt purge -y git build-essential libelf-dev libmnl-dev > /dev/null 2>&1 || true
 apt autoremove -y > /dev/null 2>&1
 apt clean
 rm -rf /usr/src/amneziawg-linux-kernel-module
 rm -rf /usr/src/amneziawg-tools
 
 # ==============================================================================
-# 7. ФИНАЛЬНЫЙ ВЫВОД
+# 7. СОХРАНЕНИЕ CREDENTIALS И ФИНАЛЬНЫЙ ВЫВОД
 # ==============================================================================
+cat <<CREDS > "$CREDS_FILE"
+# 3x-awg-adg-bundle credentials (v${SCRIPT_VERSION})
+# Generated: $(date -Iseconds)
+# ====================================
+SSH_PORT=2244
+PANEL_URL=http://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/
+PANEL_USER=${PANEL_USER}
+PANEL_PASS=${PANEL_PASS}
+ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
+ADG_USER=${ADG_USER}
+ADG_PASS=${ADG_PASS}
+AWG_CLIENT_CONF=/root/amnezia_client.conf
+CREDS
+chmod 600 "$CREDS_FILE"
+
 log "Установка и настройка успешно завершены!"
 echo -e "\n=================================================================="
 echo -e "${GREEN}SSH доступ:${RESET}"
@@ -311,5 +360,6 @@ echo -e "URL: ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
 echo -e "User: ${YELLOW}${ADG_USER}${RESET} / Pass: ${YELLOW}${ADG_PASS}${RESET}"
 echo -e "\n${GREEN}AmneziaWG:${RESET}"
 echo -e "Конфиг: ${YELLOW}/root/amnezia_client.conf${RESET}"
+echo -e "\n${GREEN}Все credentials сохранены:${RESET} ${YELLOW}${CREDS_FILE}${RESET}"
 echo -e "==================================================================\n"
 echo -e "${RED}ВНИМАНИЕ: Выполните 'sudo reboot' для окончательной активации AmneziaWG!${RESET}\n"
