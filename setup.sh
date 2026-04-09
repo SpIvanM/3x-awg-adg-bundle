@@ -299,7 +299,7 @@ if [ "$INBOUND_EXISTS" -eq 0 ]; then
     XRAY_BIN="$(resolve_xray_bin || true)"
     if [ -n "$XRAY_BIN" ]; then
         UUID=$(cat /proc/sys/kernel/random/uuid)
-        KEYS=$($XRAY_BIN x25519)
+        KEYS=$($XRAY_BIN x25519 2>&1)
         PRIV_KEY=$(echo "$KEYS" | grep "Private key:" | cut -d' ' -f3)
         PUB_KEY=$(echo "$KEYS" | grep "Public key:" | cut -d' ' -f3)
         SHORT_ID=$(openssl rand -hex 8)
@@ -530,13 +530,9 @@ dns:
     - 0.0.0.0
   port: $ADG_DNS_PORT
   upstream_dns:
-    - https://dns.cloudflare.com/dns-query
-    - https://dns.google/dns-query
-  bootstrap_dns:
     - 1.1.1.1
     - 8.8.8.8
-  cache_size: 4194304
-filtering:
+  cache_size: 4194304filtering:
   safe_search:
     enabled: true
     bing: true
