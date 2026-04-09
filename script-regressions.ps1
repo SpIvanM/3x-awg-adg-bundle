@@ -1,6 +1,6 @@
 <#
 Name: script regression checks
-Description: Validates that setup and uninstall scripts keep critical fixes for piped execution, non-interactive 3x-ui installation, DNS redirect cleanup, panel URL detection, and AdGuardHome config writes.
+Description: Validates that setup and uninstall scripts keep critical fixes for piped execution, non-interactive 3x-ui installation, DNS redirect cleanup, panel URL detection, AdGuardHome config writes, and Reality key extraction.
 Usage: powershell -File .\script-regressions.ps1
 Behavior: Reads setup.sh and uninstall.sh and fails if required guardrails are missing.
 Returns: Exit code 0 on pass, non-zero on regression.
@@ -46,7 +46,9 @@ Assert-Match -Text $setup -Pattern 'setting -getCert true' -Message 'setup.sh mu
 Assert-Match -Text $setup -Pattern 'install_xui_noninteractive' -Message 'setup.sh must install 3x-ui without the upstream interactive wizard.'
 Assert-Match -Text $setup -Pattern 'setting -username .* -password .* -port .* -webBasePath' -Message 'setup.sh must apply 3x-ui credentials via the x-ui binary after installation.'
 Assert-Match -Text $setup -Pattern 'PANEL_SCHEME=' -Message 'setup.sh must derive panel URL scheme dynamically instead of hardcoding https.'
-Assert-Match -Text $setup -Pattern 'bootstrap_dns:\r?\n\s+- 1\.1\.1\.1\r?\n\s+- 8\.8\.8\.8' -Message 'setup.sh must write bootstrap_dns as a flat YAML sequence accepted by current AdGuardHome.'
+Assert-Match -Text $setup -Pattern 'upstream_dns:\r?\n\s+- 1\.1\.1\.1\r?\n\s+- 8\.8\.8\.8' -Message 'setup.sh must use plain IP upstream DNS servers that current AdGuardHome accepts without bootstrap rewrites.'
+Assert-Match -Text $setup -Pattern 'x25519 2>&1' -Message 'setup.sh must capture xray x25519 output from stderr as well as stdout to build a valid Reality link.'
+Assert-NotMatch -Text $setup -Pattern 'bootstrap_dns:' -Message 'setup.sh must omit bootstrap_dns because current AdGuardHome rewrites it into an invalid nested sequence.'
 Assert-NotMatch -Text $setup -Pattern 'bash <\(curl -Ls https://raw\.githubusercontent\.com/mhsanaei/3x-ui/master/install\.sh\) <<EOF' -Message 'setup.sh must not drive the upstream 3x-ui installer with a fixed heredoc; prompt order is unstable.'
 Assert-NotMatch -Text $setup -Pattern 'command -v x-ui \|\| echo /usr/local/x-ui/x-ui' -Message 'setup.sh must target the x-ui binary directly; the /usr/bin/x-ui wrapper does not support setting commands.'
 Assert-NotMatch -Text $setup -Pattern 'PANEL_URL=https://\$\{SERVER_IP\}' -Message 'setup.sh must not hardcode https in stored panel URLs.'
