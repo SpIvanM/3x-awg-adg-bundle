@@ -1,11 +1,19 @@
 #!/bin/bash
 # Name: vps-vpn-triad-uninstall
 # Description: Uninstalls 3x-ui, AmneziaWG and AdGuardHome. Reverts OS changes.
-# Usage: sudo bash uninstall.sh
+# Usage: sudo bash uninstall.sh [-y | --yes]
 # Behavior: Stops services, removes configs and binaries, resets UFW.
 # ==============================================================================
 
 set -e
+
+FORCE_UNINSTALL=0
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --yes|-y) FORCE_UNINSTALL=1; shift ;;
+        *) shift ;;
+    esac
+done
 
 RED="\e[31m"
 GREEN="\e[32m"
@@ -20,10 +28,17 @@ if [ "$EUID" -ne 0 ]; then
   err "Запустите скрипт от имени root (sudo -i)"
 fi
 
-read -p "Эта операция полностью удалит VPN, DNS и панель управления. Продолжить? (y/n) " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    exit 1
+if [ "$FORCE_UNINSTALL" -ne 1 ]; then
+    if [ -e /dev/tty ]; then
+        read -r -p "Эта операция полностью удалит VPN, DNS и панель управления. Продолжить? (y/n) " -n 1 REPLY </dev/tty
+        echo >/dev/tty
+    else
+        err "Подтвердите удаление из интерактивного терминала или запустите uninstall.sh с --yes."
+    fi
+
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
 fi
 
 log "Остановка и удаление сервисов..."

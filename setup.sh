@@ -41,6 +41,30 @@ log() { echo -e "${GREEN}[INFO] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
 err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
 
+sync_panel_path_from_xui() {
+    local current_path
+    current_path=$("$XUI_BIN" setting -show true 2>/dev/null | sed -n 's/^webBasePath: //p' | tail -n 1 | tr -d '\r')
+    if [ -n "$current_path" ]; then
+        PANEL_PATH="${current_path#/}"
+        PANEL_PATH="${PANEL_PATH%/}"
+    fi
+}
+
+cleanup_legacy_awg_dns_redirects() {
+    local rule
+    local -a rule_parts
+
+    while rule=$(iptables -t nat -S PREROUTING 2>/dev/null | grep -m1 -- '-i awg0 -p udp -m udp --dport 53 -j REDIRECT --to-ports'); do
+        read -r -a rule_parts <<< "${rule/-A /-D }"
+        iptables -t nat "${rule_parts[@]}" 2>/dev/null || true
+    done
+
+    while rule=$(iptables -t nat -S PREROUTING 2>/dev/null | grep -m1 -- '-i awg0 -p tcp -m tcp --dport 53 -j REDIRECT --to-ports'); do
+        read -r -a rule_parts <<< "${rule/-A /-D }"
+        iptables -t nat "${rule_parts[@]}" 2>/dev/null || true
+    done
+}
+
 # Проверяем, запускался ли скрипт уже сегодня (для пропуска apt-операций)
 TODAY=$(date +%Y-%m-%d)
 LAST_RUN=$(cat "$LAST_RUN_FILE" 2>/dev/null || echo "")
@@ -210,6 +234,7 @@ sqlite3 /etc/x-ui/x-ui.db "DELETE FROM settings WHERE key='adguard_dns_port'; IN
 sqlite3 /etc/x-ui/x-ui.db "DELETE FROM settings WHERE key='xrayDNSConfig'; INSERT INTO settings (key, value) VALUES ('xrayDNSConfig', '{\"servers\":[\"127.0.0.1:$ADG_DNS_PORT\"]}');"
 
 systemctl restart x-ui
+sync_panel_path_from_xui
 
 # ==============================================================================
 # 3. УСТАНОВКА AMNEZIAWG
@@ -314,6 +339,7 @@ PresharedKey = $CLIENT_PSK
 AllowedIPs = 10.8.0.2/32
 EOF
 
+cleanup_legacy_awg_dns_redirects
 systemctl enable awg-quick@awg0
 set +e
 systemctl restart awg-quick@awg0 || warn "Модуль ядра не загружен. Требуется reboot!"
@@ -377,6 +403,7 @@ fi
 
 # Всегда перезаписываем конфиг (новые порт, логин, пароль)
 log "Применение конфигурации AdGuardHome..."
+systemctl stop AdGuardHome 2>/dev/null || true
 cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
 http:
   pprof:
