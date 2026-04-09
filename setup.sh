@@ -532,7 +532,8 @@ dns:
   upstream_dns:
     - 1.1.1.1
     - 8.8.8.8
-  cache_size: 4194304filtering:
+  cache_size: 4194304
+filtering:
   safe_search:
     enabled: true
     bing: true
