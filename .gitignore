@@ -6,4 +6,4 @@
 .gemini/
 .sandbox/
 .tmp/
-.agents.local.md
+.test-local/
