@@ -55,6 +55,13 @@ systemctl stop AdGuardHome 2>/dev/null || true
 systemctl disable AdGuardHome 2>/dev/null || true
 rm -rf /opt/AdGuardHome /etc/systemd/system/AdGuardHome.service /etc/systemd/system/AdGuardHome.service.d
 
+if grep -qF '/swapfile none swap sw 0 0 # 3x-awg-adg-bundle' /etc/fstab; then
+    log "Удаление managed swapfile..."
+    swapoff /swapfile 2>/dev/null || true
+    rm -f /swapfile
+    sed -i '\|^/swapfile none swap sw 0 0 # 3x-awg-adg-bundle$|d' /etc/fstab
+fi
+
 log "Сброс настроек сети и фаервола..."
 ufw --force reset
 ufw allow 22/tcp

@@ -174,6 +174,40 @@ resolve_xray_bin() {
 
     return 1
 }
+ensure_swapfile() {
+    local swapfile="/swapfile"
+    local swap_size="1G"
+    local fstab_line="/swapfile none swap sw 0 0 # 3x-awg-adg-bundle"
+
+    if swapon --show --noheadings 2>/dev/null | grep -q .; then
+        warn "Swap уже активен, пропускаем создание swapfile."
+        return 0
+    fi
+
+    if [ -f "$swapfile" ]; then
+        log "Используем существующий swapfile ${swapfile}."
+    else
+        log "Создание swapfile ${swapfile} (${swap_size})..."
+        if command -v fallocate >/dev/null 2>&1; then
+            if ! fallocate -l "$swap_size" "$swapfile"; then
+                warn "fallocate не сработал, используем dd для создания swapfile."
+                dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
+            fi
+        else
+            dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
+        fi
+        chmod 600 "$swapfile"
+        mkswap "$swapfile" >/dev/null
+    fi
+
+    chmod 600 "$swapfile"
+    if ! grep -qF "$fstab_line" /etc/fstab; then
+        echo "$fstab_line" >> /etc/fstab
+    fi
+    swapon "$swapfile"
+    log "Swapfile активирован: ${swapfile}"
+}
+
 # Проверяем, запускался ли скрипт уже сегодня (для пропуска apt-операций)
 TODAY=$(date +%Y-%m-%d)
 LAST_RUN=$(cat "$LAST_RUN_FILE" 2>/dev/null || echo "")
@@ -191,6 +225,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ==============================================================================
+ensure_swapfile
+
 # 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
 # ==============================================================================
 if [ "$SKIP_APT" -eq 0 ]; then
