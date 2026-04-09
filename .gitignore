@@ -1,7 +1,9 @@
-# Name: Git Ignore
-# Description: Excludes sidecars and temp files.
+# Name: Git Ignore Rules
+# Description: Excludes sidecars, temp files, and local-only agent notes from version control.
+# Usage: Keep repository-specific untracked artifacts out of Git.
 *.meta.md
 *.txt
 .gemini/
 .sandbox/
 .tmp/
+.agents.local.md
