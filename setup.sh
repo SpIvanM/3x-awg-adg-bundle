@@ -43,10 +43,31 @@ err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
 
 sync_panel_path_from_xui() {
     local current_path
-    current_path=$("$XUI_BIN" setting -show true 2>/dev/null | sed -n 's/^webBasePath: //p' | tail -n 1 | tr -d '\r')
-    if [ -n "$current_path" ]; then
+    local current_port
+    local current_cert
+    local current_key
+    local xui_bin="${XUI_BIN:-$(resolve_xui_bin || true)}"
+
+    [ -n "$xui_bin" ] || return 0
+
+    current_path=$("$xui_bin" setting -show true 2>/dev/null | sed -n 's/^webBasePath: //p' | tail -n 1 | tr -d '\r')
+    current_port=$("$xui_bin" setting -show true 2>/dev/null | sed -n 's/^port: //p' | tail -n 1 | tr -d '\r')
+    current_cert=$("$xui_bin" setting -getCert true 2>/dev/null | sed -n 's/^cert: //p' | tail -n 1 | tr -d '\r')
+    current_key=$("$xui_bin" setting -getCert true 2>/dev/null | sed -n 's/^key: //p' | tail -n 1 | tr -d '\r')
+
+    if [ -n "$current_path" ] && [ "$current_path" != "/" ]; then
         PANEL_PATH="${current_path#/}"
         PANEL_PATH="${PANEL_PATH%/}"
+    fi
+
+    if [ -n "$current_port" ]; then
+        PANEL_PORT="$current_port"
+    fi
+
+    if [ -n "$current_cert" ] && [ -n "$current_key" ]; then
+        PANEL_SCHEME="https"
+    else
+        PANEL_SCHEME="http"
     fi
 }
 
@@ -65,6 +86,94 @@ cleanup_legacy_awg_dns_redirects() {
     done
 }
 
+detect_xui_arch() {
+    case "$(uname -m)" in
+        x86_64|x64|amd64) echo 'amd64' ;;
+        i*86|x86) echo '386' ;;
+        armv8*|armv8|arm64|aarch64) echo 'arm64' ;;
+        armv7*|armv7|arm) echo 'armv7' ;;
+        armv6*|armv6) echo 'armv6' ;;
+        armv5*|armv5) echo 'armv5' ;;
+        s390x) echo 's390x' ;;
+        *) err "Неподдерживаемая архитектура CPU для 3x-ui: $(uname -m)" ;;
+    esac
+}
+
+install_xui_noninteractive() {
+    local release_tag
+    local xui_arch
+    local archive_path
+    local cli_temp
+    local xui_folder="/usr/local/x-ui"
+    local xui_service="/etc/systemd/system"
+    local service_source
+
+    xui_arch="$(detect_xui_arch)"
+    release_tag=$(curl -fsSL https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null | jq -r '.tag_name // empty' 2>/dev/null || true)
+    if [ -z "$release_tag" ]; then
+        release_tag=$(curl -fsSL https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' | head -n 1)
+    fi
+    [ -n "$release_tag" ] || err "Не удалось определить актуальную версию 3x-ui."
+
+    archive_path="/tmp/x-ui-linux-${xui_arch}.tar.gz"
+    cli_temp="/tmp/x-ui-cli.sh"
+
+    curl -fsSL "https://github.com/MHSanaei/3x-ui/releases/download/${release_tag}/x-ui-linux-${xui_arch}.tar.gz" -o "$archive_path"
+    curl -fsSL https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.sh -o "$cli_temp"
+
+    systemctl stop x-ui 2>/dev/null || true
+    rm -rf "$xui_folder"
+    mkdir -p /usr/local
+    tar -xzf "$archive_path" -C /usr/local
+    rm -f "$archive_path"
+
+    install -m 755 "$cli_temp" /usr/bin/x-ui
+    rm -f "$cli_temp"
+
+    chmod +x "$xui_folder/x-ui" "$xui_folder/x-ui.sh"
+    if [ -d "$xui_folder/bin" ]; then
+        find "$xui_folder/bin" -maxdepth 1 -type f -name 'xray*' -exec chmod +x {} +
+    fi
+    mkdir -p /var/log/x-ui
+
+    if [ -f "$xui_folder/x-ui.service" ]; then
+        service_source="$xui_folder/x-ui.service"
+    elif [ -f "$xui_folder/x-ui.service.debian" ]; then
+        service_source="$xui_folder/x-ui.service.debian"
+    elif [ -f "$xui_folder/x-ui.service.arch" ]; then
+        service_source="$xui_folder/x-ui.service.arch"
+    elif [ -f "$xui_folder/x-ui.service.rhel" ]; then
+        service_source="$xui_folder/x-ui.service.rhel"
+    else
+        err "Не найден systemd unit 3x-ui в архиве релиза."
+    fi
+
+    install -m 644 "$service_source" "$xui_service/x-ui.service"
+    systemctl daemon-reload
+    systemctl enable x-ui >/dev/null 2>&1
+    systemctl start x-ui
+    systemctl is-active --quiet x-ui || err "3x-ui не запустился после установки."
+}
+
+resolve_xui_bin() {
+    [ -x "/usr/local/x-ui/x-ui" ] && { echo "/usr/local/x-ui/x-ui"; return 0; }
+    return 1
+}
+
+resolve_xray_bin() {
+    local xui_arch
+    local candidate
+
+    xui_arch="$(detect_xui_arch)"
+    for candidate in \
+        "/usr/local/x-ui/bin/xray" \
+        "/usr/local/x-ui/bin/xray-linux-${xui_arch}"
+    do
+        [ -x "$candidate" ] && { echo "$candidate"; return 0; }
+    done
+
+    return 1
+}
 # Проверяем, запускался ли скрипт уже сегодня (для пропуска apt-операций)
 TODAY=$(date +%Y-%m-%d)
 LAST_RUN=$(cat "$LAST_RUN_FILE" 2>/dev/null || echo "")
@@ -149,6 +258,7 @@ PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
 # Загружаем или генерируем новые credentials 3x-ui
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
     log "Загрузка существующих credentials 3x-ui из $CREDS_FILE..."
+    PANEL_SCHEME=$(grep "PANEL_URL" "$CREDS_FILE" | sed -E 's#([a-z]+)://.*#\1#' | xargs || echo "http")
     PANEL_PORT=$(grep "PANEL_URL" "$CREDS_FILE" | sed -e 's|.*:| |' -e 's|/.*||' | xargs || echo "2053")
     PANEL_USER=$(grep "PANEL_USER" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
     PANEL_PASS=$(grep "PANEL_PASS" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
@@ -160,6 +270,7 @@ fi
 [ -z "$PANEL_USER" ] && PANEL_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
 [ -z "$PANEL_PASS" ] && PANEL_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
 [ -z "$PANEL_PATH" ] && PANEL_PATH=$(tr -dc a-z0-9 </dev/urandom | head -c 16)
+[ -z "$PANEL_SCHEME" ] && PANEL_SCHEME=http
 
 # Prepare the AdGuard DNS listener port early so Xray can point to the final value.
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
@@ -170,28 +281,23 @@ fi
 if systemctl is-active --quiet x-ui 2>/dev/null && [ -f /etc/x-ui/x-ui.db ]; then
     warn "3x-ui уже установлен и работает. Пропускаем скрипт инсталляции."
 else
-    log "Запуск инсталлятора 3x-ui..."
-    bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
-y
-${PANEL_USER}
-${PANEL_PASS}
-${PANEL_PORT}
-EOF
+    log "Установка 3x-ui без интерактивного мастера..."
+    install_xui_noninteractive
     # Ожидание инициализации БД 3x-ui (до 10 секунд)
     for i in $(seq 1 10); do [ -f /etc/x-ui/x-ui.db ] && break; sleep 1; done
     [ -f /etc/x-ui/x-ui.db ] || err "БД 3x-ui не создана"
 fi
 
-# Применение защитного пути в БД 3x-ui (даже если установлен, обновляем путь)
-XUI_BIN="$(command -v x-ui || echo /usr/local/x-ui/x-ui)"
-"$XUI_BIN" setting -webBasePath "${PANEL_PATH}" >/dev/null 2>&1 || warn "Не удалось применить webBasePath через x-ui CLI."
-
+# Применяем credentials и защитный путь через встроенный binary CLI 3x-ui.
+XUI_BIN="$(resolve_xui_bin || true)"
+[ -n "$XUI_BIN" ] || err "Бинарный файл 3x-ui не найден после установки."
+"$XUI_BIN" setting -username "${PANEL_USER}" -password "${PANEL_PASS}" -port "${PANEL_PORT}" -webBasePath "${PANEL_PATH}" >/dev/null 2>&1 || err "Не удалось применить настройки 3x-ui через встроенный CLI."
 # Проверяем, есть ли уже инбаунды, чтобы не создавать дубликаты
 INBOUND_EXISTS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT count(*) FROM inbounds WHERE remark='VLESS-Reality-Default';")
 if [ "$INBOUND_EXISTS" -eq 0 ]; then
     log "Создание дефолтного VLESS-Reality инбаунда..."
-    XRAY_BIN="/usr/local/x-ui/bin/xray"
-    if [ -f "$XRAY_BIN" ]; then
+    XRAY_BIN="$(resolve_xray_bin || true)"
+    if [ -n "$XRAY_BIN" ]; then
         UUID=$(cat /proc/sys/kernel/random/uuid)
         KEYS=$($XRAY_BIN x25519)
         PRIV_KEY=$(echo "$KEYS" | grep "Private key:" | cut -d' ' -f3)
@@ -426,7 +532,9 @@ dns:
   upstream_dns:
     - https://dns.cloudflare.com/dns-query
     - https://dns.google/dns-query
-  bootstrap_dns: ["1.1.1.1", "8.8.8.8"]
+  bootstrap_dns:
+    - 1.1.1.1
+    - 8.8.8.8
   cache_size: 4194304
 filtering:
   safe_search:
@@ -558,7 +666,7 @@ cat <<CREDS > "$CREDS_FILE"
 # Generated: $(date -Iseconds)
 # ====================================
 SSH_PORT=2244
-PANEL_URL=https://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/
+PANEL_URL=${PANEL_SCHEME}://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/
 PANEL_USER=${PANEL_USER}
 PANEL_PASS=${PANEL_PASS}
 ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
@@ -569,13 +677,20 @@ AWG_CLIENT_CONF=/root/amnezia_client.conf
 CREDS
 chmod 600 "$CREDS_FILE"
 
+[ -z "$PANEL_SCHEME" ] && PANEL_SCHEME="http"
+if [ "$PANEL_SCHEME" = "https" ]; then
+    PANEL_URL_NOTE="${RED}(ВНИМАНИЕ: HTTPS, при первом входе браузер может показать предупреждение сертификата)${RESET}"
+else
+    PANEL_URL_NOTE="${YELLOW}(ВНИМАНИЕ: HTTP, SSL-сертификат для панели не настроен)${RESET}"
+fi
+
 log "Установка и настройка успешно завершены!"
 echo -e "\n=================================================================="
 echo -e "${GREEN}SSH доступ:${RESET}"
 echo -e "Порт: ${YELLOW}2244${RESET}"
 
 echo -e "\n${GREEN}Панель 3x-ui:${RESET}"
-echo -e "URL: ${YELLOW}https://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET} ${RED}(ВНИМАНИЕ: HTTPS, при первом входе браузер может показать предупреждение сертификата)${RESET}"
+echo -e "URL: ${YELLOW}${PANEL_SCHEME}://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET} ${PANEL_URL_NOTE}"
 echo -e "User: ${YELLOW}${PANEL_USER}${RESET} / Pass: ${YELLOW}${PANEL_PASS}${RESET}"
 
 if [ ! -z "$VLESS_LINK" ]; then
