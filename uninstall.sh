@@ -1,6 +1,6 @@
 #!/bin/bash
 # Name: vps-vpn-triad-uninstall
-# Description: Uninstalls 3x-ui, AmneziaWG and AdGuardHome. Reverts OS changes.
+# Description: Uninstalls Xray, AmneziaWG and AdGuardHome. Reverts OS changes.
 # Usage: sudo bash uninstall.sh [-y | --yes]
 # Behavior: Stops services, removes configs and binaries, resets UFW.
 # ==============================================================================
@@ -42,9 +42,12 @@ if [ "$FORCE_UNINSTALL" -ne 1 ]; then
 fi
 
 log "Остановка и удаление сервисов..."
-systemctl stop x-ui 2>/dev/null || true
-systemctl disable x-ui 2>/dev/null || true
-rm -rf /usr/local/x-ui /etc/x-ui /etc/systemd/system/x-ui.service
+systemctl stop xray 2>/dev/null || true
+systemctl disable xray 2>/dev/null || true
+rm -rf /usr/local/bin/xray
+rm -rf /usr/local/etc/xray
+rm -rf /etc/systemd/system/xray.service /etc/systemd/system/xray@.service /var/log/xray
+systemctl daemon-reload 2>/dev/null || true
 
 systemctl stop awg-quick@awg0 2>/dev/null || true
 systemctl disable awg-quick@awg0 2>/dev/null || true
@@ -54,6 +57,9 @@ rm -rf /etc/amnezia/amneziawg /etc/systemd/system/awg-quick@.service
 systemctl stop AdGuardHome 2>/dev/null || true
 systemctl disable AdGuardHome 2>/dev/null || true
 rm -rf /opt/AdGuardHome /etc/systemd/system/AdGuardHome.service /etc/systemd/system/AdGuardHome.service.d
+
+rm -f /etc/fail2ban/jail.d/vpn-bundle.local
+systemctl restart fail2ban 2>/dev/null || true
 
 if grep -qF '/swapfile none swap sw 0 0 # 3x-awg-adg-bundle' /etc/fstab; then
     log "Удаление managed swapfile..."

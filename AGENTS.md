@@ -10,7 +10,7 @@ Description: Суть и правила проекта 3x-awg-adg-bundle для 
 ## 1. Суть и Стек
 
 **Миссия:** "One-click" DPI-shield для VPS от **512MB RAM**.
-**Стек:** AmneziaWG + Xray (Reality) + AdGuardHome (AGH) + 3x-ui.
+**Стек:** AmneziaWG + Xray (Reality) + AdGuardHome (AGH).
 **Цель:** Очищенный интернет (No Ads/SafeSearch) и обход блокировок "из коробки".
 
 ## 2. Ключевые правила (Инварианты)
@@ -40,7 +40,7 @@ graph TD
   
     subgraph VPS ["VPS Сервер"]
         AWG["AmneziaWG"]
-        XR["Xray (3x-ui)"]
+        XR["Xray (Reality)"]
         AGH["AdGuardHome"]
 
         AWG -->|"TProxy"| XR

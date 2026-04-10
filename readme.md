@@ -1,133 +1,149 @@
 <!--
-Name: 3x-awg-adg-bundle Comprehensive Guide
-Description: Documentation for the automated VPN/DNS triad (3x-ui, AmneziaWG, AdGuardHome).
-Usage: Refer to installation commands below.
-Behavior: Provides installation/uninstallation instructions, architectural overview, and security details.
-Returns: Structured project overview.
-Fails: n/a
+Name: Xray Reality Bundle Guide
+Description: Documentation for the automated VPN/DNS bundle (Xray Reality, AmneziaWG, AdGuardHome).
+Usage: Read before running setup.sh or uninstall.sh.
+Behavior: Explains the direct Xray install flow, generated outputs, and cleanup path.
+Returns: Operator reference for the current bundle layout.
+Fails: N/A.
 -->
 
-# 🛡️ 3x-awg-adg-bundle
+# 3x-awg-adg-bundle
 
-**The Ultimate "One-Click" Shield for your VPS.**  
-Auto-deploy a professional-grade VPN ecosystem featuring **AmneziaWG**, **3x-ui (Xray)**, and **AdGuardHome**.
+Auto-deploys a compact VPN/DNS stack for a VPS: **AmneziaWG**, **Xray Reality**, and **AdGuardHome**.
+The installer configures Xray directly. Panel-based management is not part of the default path anymore.
 
-[🇷🇺 Перейти к описанию на русском](#russian) | [🇺🇸 Switch to English description](#english)
+[🇷🇺 Перейти к русской версии](#russian) | [🇺🇸 Switch to English version](#english)
 
 ---
 
 ## <span id="russian"></span>🇷🇺 Русский
 
-Этот проект превращает чистый VPS в мощный, защищенный интернет-шлюз за 5 минут. Мы объединили лучшие инструменты обхода блокировок и фильтрации рекламы в одну связную систему.
+Этот проект превращает чистый VPS в связку из трёх компонентов:
+- AmneziaWG для VPN-доступа.
+- Xray Reality на `443`.
+- AdGuardHome для DNS-фильтрации и SafeSearch.
 
-### 🧩 Топология сети
+### Топология
 
 ```mermaid
 graph TD
     User([Устройства])
-    
-    subgraph VPS [VPS Сервер - Защищенная Экосистема]
+
+    subgraph VPS [VPS Сервер]
         AWG[AmneziaWG]
-        XR[Xray Core / 3x-ui]
-        AGH[AdGuard Home]
-        
-        AWG -->|"TProxy (Весь трафик)"| XR
-        AWG -.->|"Перехват DNS"| AGH
-        XR -.->|"Upstream DNS"| AGH
+        XR[Xray Reality]
+        AGH[AdGuardHome]
+
+        AWG -->|TProxy| XR
+        AWG -.->|DNS DNAT 53| AGH
+        XR -.->|Remote DNS| AGH
     end
 
-    XR -->|"VLESS / Reality / Direct"| Net((Интернет))
-    AGH -->|"DoH / DoT"| DNS((Публичный DNS))
+    XR -->|VLESS / Reality| Net((Интернет))
+    AGH -->|DoH / DoT / UDP| DNS((Публичный DNS))
 
-    User -->|"UDP: Amnezia (Обфускация)"| AWG
-    User -->|"TCP 443: Reality"| XR
-    User -->|"Порт 2244"| SSH[Защищенный SSH]
+    User -->|UDP| AWG
+    User -->|TCP 443| XR
+    User -->|Web UI / DNS| AGH
 ```
 
-### 🚀 Преимущества связки
+### Что делает `setup.sh`
 
-1.  **DPI-Shield (AmneziaWG)**: Специальная версия WireGuard с модифицированными заголовками пакетов. Она выглядит как "шум" для систем глубокого анализа трафика (ТСПУ), что позволяет обходить блокировки, которые убивают обычный WireGuard.
-2.  **Двойная фильтрация (AdGuardHome)**: Весь ваш VPN-трафик проходит через AGH. Это убирает рекламу, трекеры и обеспечивает **Безопасный поиск** на уровне сети для всех подключенных устройств.
-3.  **Гибкость Xray (Reality)**: В комплекте идет панель 3x-ui, настроенная на работу через 443 порт с протоколом Reality. Это делает ваш прокси-трафик неотличимым от посещения популярного сайта (например, Microsoft или Apple).
-4.  **Умная маршрутизация (TProxy)**: Весь трафик из VPN автоматически попадает в Xray. Это позволяет реализовать сложные сценарии: например, отправлять часть трафика через цепочку других прокси.
-5.  **Hardening "из коробки"**: Скрипт меняет SSH на порт 2244, включает BBR для ускорения интернета и настраивает оптимальные параметры ядра.
+- Устанавливает Xray-core через официальный installer.
+- Пишет конфиг в `/usr/local/etc/xray/config.json`.
+- Поднимает `VLESS + Reality + Vision` inbound на `443`.
+- Генерирует и печатает `vless://` ссылку.
+- Настраивает AmneziaWG, TProxy, DNS DNAT и AdGuardHome.
+- Включает базовое hardening: `UFW`, `Fail2Ban`, `BBR`, `sysctl`, SSH на `2244`.
 
-### 🛠️ Установка
+### Установка
 
 ```bash
-# Обычная установка (сохраняет существующие пароли при повторном запуске)
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
+### Повторный запуск с ротацией
+
 ```bash
-# Установка с ротацией (сменой) всех паролей и портов
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
-### 🧹 Удаление
+### Удаление
+
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/uninstall.sh | sudo bash
 ```
 
-### ⚠️ Важные примечания
-- **Перезагрузка**: Обязательно выполните `sudo reboot` после первой установки.
-- **Учетные данные**: Все ссылки, пароли и QR-коды для подключения сохраняются в `/root/.vpn-credentials`.
+### Важные заметки
+
+- Ссылки, пароли и QR-коды сохраняются в `/root/.vpn-credentials`.
+- Дефолтная `VLESS` ссылка печатается самим `setup.sh` после генерации Reality-ключей.
+- `Hysteria2` не входит в автоматический inbound-путь этого репозитория. Если нужен именно он, добавляй его отдельно, вне базового сценария.
+- После первой установки нужен `sudo reboot`.
 
 ---
 
 ## <span id="english"></span>🇺🇸 English
 
-Transform a clean VPS into a robust, high-performance internet gateway in 5 minutes. We combine the best-in-class censorship-bypass tools and ad-filtering solutions into a seamless ecosystem.
+This repo turns a clean VPS into a three-part stack:
+- AmneziaWG for VPN access.
+- Xray Reality on port `443`.
+- AdGuardHome for DNS filtering and SafeSearch.
 
-### 🧩 Network Topology
+### Topology
 
 ```mermaid
 graph TD
     User([Devices])
-    
-    subgraph VPS [VPS Server - Shielded Ecosystem]
+
+    subgraph VPS [VPS Server]
         AWG[AmneziaWG]
-        XR[Xray Core / 3x-ui]
-        AGH[AdGuard Home]
-        
-        AWG -->|"TProxy (All Traffic)"| XR
-        AWG -.->|"Intercept DNS"| AGH
-        XR -.->|"Upstream DNS"| AGH
+        XR[Xray Reality]
+        AGH[AdGuardHome]
+
+        AWG -->|TProxy| XR
+        AWG -.->|DNS DNAT 53| AGH
+        XR -.->|Remote DNS| AGH
     end
 
-    XR -->|"VLESS / Reality / Direct"| Net((Internet))
-    AGH -->|"DoH / DoT"| DNS((Public DNS))
+    XR -->|VLESS / Reality| Net((Internet))
+    AGH -->|DoH / DoT / UDP| DNS((Public DNS))
 
-    User -->|"UDP: Amnezia (Obfuscated)"| AWG
-    User -->|"TCP 443: Reality"| XR
-    User -->|"Port 2244"| SSH[Secure SSH]
+    User -->|UDP| AWG
+    User -->|TCP 443| XR
+    User -->|Web UI / DNS| AGH
 ```
 
-### 💎 Key Advantages
+### What `setup.sh` does
 
-1.  **DPI-Shield (AmneziaWG)**: A specialized WireGuard implementation with modified packet headers. It looks like random noise to Deep Packet Inspection (DPI) systems, bypassing blocks that "kill" standard WireGuard.
-2.  **DNS-Level Protection (AdGuardHome)**: All VPN traffic is routed through AGH. This eliminates ads, and trackers, and enforces **SafeSearch** across all connected devices directly at the network level.
-3.  **Stealth Proximization (Reality)**: The bundle includes the 3x-ui panel pre-configured with VLESS-Reality on port 443. This masks your proxy traffic as legitimate HTTPS traffic to popular websites.
-4.  **Cascading Routing (TProxy)**: Traffic from the VPN is transparently proxied into Xray. This allows for advanced routing logic, such as chaining multiple proxies or selective routing.
-5.  **Out-of-the-Box Hardening**: Automatically updates SSH to port 2244, enables BBR for traffic optimization, and applies security sysctl tweaks.
+- Installs Xray-core using the official installer.
+- Writes the config to `/usr/local/etc/xray/config.json`.
+- Creates a `VLESS + Reality + Vision` inbound on port `443`.
+- Prints a `vless://` link.
+- Sets up AmneziaWG, TProxy, DNS DNAT, and AdGuardHome.
+- Enables baseline hardening: `UFW`, `Fail2Ban`, `BBR`, `sysctl`, SSH on `2244`.
 
-### 🛠️ Installation
+### Install
 
 ```bash
-# Standard installation (preserves existing credentials when run again)
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
+### Re-run with rotation
+
 ```bash
-# Installation with credential rotation (forced regeneration of all passwords/ports)
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
-### 🧹 Uninstallation
+### Uninstall
+
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/uninstall.sh | sudo bash
 ```
 
-### ⚠️ Important Notes
-- **Reboot**: A `sudo reboot` is mandatory after the initial installation.
-- **Credentials**: All generated access links, passwords, and QR codes are stored in `/root/.vpn-credentials` for your convenience.
+### Notes
+
+- Links, passwords, and QR codes are stored in `/root/.vpn-credentials`.
+- The default `VLESS` link is printed by `setup.sh` after Reality keys are generated.
+- `Hysteria2` is not part of the automated inbound flow in this repo. If you need it, add it separately outside the default path.
+- A `sudo reboot` is required after the first install.

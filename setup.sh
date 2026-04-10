@@ -1,12 +1,12 @@
 #!/bin/bash
-# Name: vps-vpn-triad (3x-ui + AWG + AdGuard)
-# Description: Configures OS networking, 3x-ui, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
+# Name: vps-vpn-triad (Xray Reality + AWG + AdGuard)
+# Description: Configures OS networking, Xray Reality, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate]
-# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard. Use -r to rotate credentials.
+# Behavior: Updates sysctl, installs OS packages, installs Xray-core, compiles AmneziaWG kernel module, sets up AdGuard. Use -r to rotate credentials.
 # Returns: Complete VPN and DNS server proxy routing.
 # Fails: If run without root privileges.
 # ==============================================================================
-# Комплексный скрипт настройки Debian 11/Ubuntu: OS Optimization + 3x-ui + AmneziaWG + AdGuardHome
+# Комплексный скрипт настройки Debian 11/Ubuntu: OS Optimization + Xray Reality + AmneziaWG + AdGuardHome
 # ==============================================================================
 
 set -e
@@ -14,7 +14,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="2.0.0"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
@@ -41,138 +41,170 @@ log() { echo -e "${GREEN}[INFO] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
 err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
 
-sync_panel_path_from_xui() {
-    local current_path
-    local current_port
-    local current_cert
-    local current_key
-    local xui_bin="${XUI_BIN:-$(resolve_xui_bin || true)}"
-
-    [ -n "$xui_bin" ] || return 0
-
-    current_path=$("$xui_bin" setting -show true 2>/dev/null | sed -n 's/^webBasePath: //p' | tail -n 1 | tr -d '\r')
-    current_port=$("$xui_bin" setting -show true 2>/dev/null | sed -n 's/^port: //p' | tail -n 1 | tr -d '\r')
-    current_cert=$("$xui_bin" setting -getCert true 2>/dev/null | sed -n 's/^cert: //p' | tail -n 1 | tr -d '\r')
-    current_key=$("$xui_bin" setting -getCert true 2>/dev/null | sed -n 's/^key: //p' | tail -n 1 | tr -d '\r')
-
-    if [ -n "$current_path" ] && [ "$current_path" != "/" ]; then
-        PANEL_PATH="${current_path#/}"
-        PANEL_PATH="${PANEL_PATH%/}"
+install_xray_core() {
+    if command -v xray >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^xray\.service'; then
+        systemctl enable xray >/dev/null 2>&1 || true
+        return 0
     fi
 
-    if [ -n "$current_port" ]; then
-        PANEL_PORT="$current_port"
-    fi
-
-    if [ -n "$current_cert" ] && [ -n "$current_key" ]; then
-        PANEL_SCHEME="https"
-    else
-        PANEL_SCHEME="http"
-    fi
-}
-
-cleanup_legacy_awg_dns_redirects() {
-    local rule
-    local -a rule_parts
-
-    while rule=$(iptables -t nat -S PREROUTING 2>/dev/null | grep -m1 -- '-i awg0 -p udp -m udp --dport 53 -j REDIRECT --to-ports'); do
-        read -r -a rule_parts <<< "${rule/-A /-D }"
-        iptables -t nat "${rule_parts[@]}" 2>/dev/null || true
-    done
-
-    while rule=$(iptables -t nat -S PREROUTING 2>/dev/null | grep -m1 -- '-i awg0 -p tcp -m tcp --dport 53 -j REDIRECT --to-ports'); do
-        read -r -a rule_parts <<< "${rule/-A /-D }"
-        iptables -t nat "${rule_parts[@]}" 2>/dev/null || true
-    done
-}
-
-detect_xui_arch() {
-    case "$(uname -m)" in
-        x86_64|x64|amd64) echo 'amd64' ;;
-        i*86|x86) echo '386' ;;
-        armv8*|armv8|arm64|aarch64) echo 'arm64' ;;
-        armv7*|armv7|arm) echo 'armv7' ;;
-        armv6*|armv6) echo 'armv6' ;;
-        armv5*|armv5) echo 'armv5' ;;
-        s390x) echo 's390x' ;;
-        *) err "Неподдерживаемая архитектура CPU для 3x-ui: $(uname -m)" ;;
-    esac
-}
-
-install_xui_noninteractive() {
-    local release_tag
-    local xui_arch
-    local archive_path
-    local cli_temp
-    local xui_folder="/usr/local/x-ui"
-    local xui_service="/etc/systemd/system"
-    local service_source
-
-    xui_arch="$(detect_xui_arch)"
-    release_tag=$(curl -fsSL https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null | jq -r '.tag_name // empty' 2>/dev/null || true)
-    if [ -z "$release_tag" ]; then
-        release_tag=$(curl -fsSL https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' | head -n 1)
-    fi
-    [ -n "$release_tag" ] || err "Не удалось определить актуальную версию 3x-ui."
-
-    archive_path="/tmp/x-ui-linux-${xui_arch}.tar.gz"
-    cli_temp="/tmp/x-ui-cli.sh"
-
-    curl -fsSL "https://github.com/MHSanaei/3x-ui/releases/download/${release_tag}/x-ui-linux-${xui_arch}.tar.gz" -o "$archive_path"
-    curl -fsSL https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.sh -o "$cli_temp"
-
-    systemctl stop x-ui 2>/dev/null || true
-    rm -rf "$xui_folder"
-    mkdir -p /usr/local
-    tar -xzf "$archive_path" -C /usr/local
-    rm -f "$archive_path"
-
-    install -m 755 "$cli_temp" /usr/bin/x-ui
-    rm -f "$cli_temp"
-
-    chmod +x "$xui_folder/x-ui" "$xui_folder/x-ui.sh"
-    if [ -d "$xui_folder/bin" ]; then
-        find "$xui_folder/bin" -maxdepth 1 -type f -name 'xray*' -exec chmod +x {} +
-    fi
-    mkdir -p /var/log/x-ui
-
-    if [ -f "$xui_folder/x-ui.service" ]; then
-        service_source="$xui_folder/x-ui.service"
-    elif [ -f "$xui_folder/x-ui.service.debian" ]; then
-        service_source="$xui_folder/x-ui.service.debian"
-    elif [ -f "$xui_folder/x-ui.service.arch" ]; then
-        service_source="$xui_folder/x-ui.service.arch"
-    elif [ -f "$xui_folder/x-ui.service.rhel" ]; then
-        service_source="$xui_folder/x-ui.service.rhel"
-    else
-        err "Не найден systemd unit 3x-ui в архиве релиза."
-    fi
-
-    install -m 644 "$service_source" "$xui_service/x-ui.service"
+    log "Установка Xray-core через официальный инсталлятор..."
+    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
     systemctl daemon-reload
-    systemctl enable x-ui >/dev/null 2>&1
-    systemctl start x-ui
-    systemctl is-active --quiet x-ui || err "3x-ui не запустился после установки."
-}
-
-resolve_xui_bin() {
-    [ -x "/usr/local/x-ui/x-ui" ] && { echo "/usr/local/x-ui/x-ui"; return 0; }
-    return 1
+    systemctl enable xray >/dev/null 2>&1 || true
 }
 
 resolve_xray_bin() {
-    local xui_arch
-    local candidate
+    command -v xray 2>/dev/null || true
+}
 
-    xui_arch="$(detect_xui_arch)"
-    for candidate in \
-        "/usr/local/x-ui/bin/xray" \
-        "/usr/local/x-ui/bin/xray-linux-${xui_arch}"
-    do
-        [ -x "$candidate" ] && { echo "$candidate"; return 0; }
-    done
+write_xray_config() {
+    local config_dir="/usr/local/etc/xray"
+    local config_file="${config_dir}/config.json"
 
-    return 1
+    mkdir -p "$config_dir"
+    cat <<EOF > "$config_file"
+{
+  "log": {
+    "access": "none",
+    "dnsLog": false,
+    "error": "",
+    "loglevel": "warning",
+    "maskAddress": ""
+  },
+  "dns": {
+    "servers": [
+      "127.0.0.1:${ADG_DNS_PORT}"
+    ]
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "email": "reality-default",
+            "flow": "xtls-rprx-vision",
+            "id": "${XRAY_UUID}"
+          }
+        ],
+        "decryption": "none"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ],
+        "enabled": true,
+        "metadataOnly": true,
+        "routeOnly": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "realitySettings": {
+          "dest": "google.com:443",
+          "privateKey": "${XRAY_PRIVATE_KEY}",
+          "serverNames": [
+            "google.com",
+            "www.google.com"
+          ],
+          "shortIds": [
+            "${XRAY_SHORT_ID}"
+          ],
+          "show": false,
+          "xver": 0
+        },
+        "security": "reality",
+        "tcpSettings": {
+          "header": {
+            "type": "none"
+          }
+        }
+      },
+      "tag": "inbound-443"
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${T_PORT},
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1",
+        "followRedirect": true,
+        "network": "tcp,udp"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ],
+        "enabled": true,
+        "metadataOnly": true,
+        "routeOnly": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 1,
+          "tproxy": "tproxy"
+        }
+      },
+      "tag": "tproxy-in"
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "AsIs"
+      },
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "settings": {},
+      "tag": "blocked"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "inboundTag": [
+          "inbound-443"
+        ],
+        "outboundTag": "direct",
+        "type": "field"
+      },
+      {
+        "inboundTag": [
+          "tproxy-in"
+        ],
+        "outboundTag": "direct",
+        "type": "field"
+      },
+      {
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "blocked",
+        "type": "field"
+      },
+      {
+        "outboundTag": "blocked",
+        "protocol": [
+          "bittorrent"
+        ],
+        "type": "field"
+      }
+    ]
+  }
+}
+EOF
+    chmod 644 "$config_file"
 }
 ensure_swapfile() {
     local swapfile="/swapfile"
@@ -285,98 +317,59 @@ EOF
 sysctl --system > /dev/null
 
 # ==============================================================================
-# 2. УСТАНОВКА 3X-UI
+# 2. УСТАНОВКА XRAY
 # ==============================================================================
-log "Проверка и установка 3x-ui..."
+log "Проверка и установка Xray-core..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+XRAY_PORT=443
+T_PORT=12345
 
-# Загружаем или генерируем новые credentials 3x-ui
+# Загружаем или генерируем новые credentials Xray
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
-    log "Загрузка существующих credentials 3x-ui из $CREDS_FILE..."
-    PANEL_SCHEME=$(grep "PANEL_URL" "$CREDS_FILE" | sed -E 's#([a-z]+)://.*#\1#' | xargs || echo "http")
-    PANEL_PORT=$(grep "PANEL_URL" "$CREDS_FILE" | sed -e 's|.*:| |' -e 's|/.*||' | xargs || echo "2053")
-    PANEL_USER=$(grep "PANEL_USER" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-    PANEL_PASS=$(grep "PANEL_PASS" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-    PANEL_PATH=$(grep "PANEL_URL" "$CREDS_FILE" | sed -e 's|.*/\([^/]*\)/$|\1|' | xargs)
+    log "Загрузка существующих credentials Xray из $CREDS_FILE..."
+    XRAY_UUID=$(grep "^XRAY_UUID=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    XRAY_PRIVATE_KEY=$(grep "^XRAY_PRIVATE_KEY=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    XRAY_PUBLIC_KEY=$(grep "^XRAY_PUBLIC_KEY=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    XRAY_SHORT_ID=$(grep "^XRAY_SHORT_ID=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    ADG_DNS_PORT=$(grep "^ADG_DNS_PORT=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
 fi
 
 # Если после загрузки переменные пустые, генерируем заново
-[ -z "$PANEL_PORT" ] && PANEL_PORT=2053
-[ -z "$PANEL_USER" ] && PANEL_USER=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
-[ -z "$PANEL_PASS" ] && PANEL_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 12)
-[ -z "$PANEL_PATH" ] && PANEL_PATH=$(tr -dc a-z0-9 </dev/urandom | head -c 16)
-[ -z "$PANEL_SCHEME" ] && PANEL_SCHEME=http
+[ -z "$XRAY_UUID" ] && XRAY_UUID=$(cat /proc/sys/kernel/random/uuid)
+[ -z "$XRAY_SHORT_ID" ] && XRAY_SHORT_ID=$(openssl rand -hex 8)
 
 # Prepare the AdGuard DNS listener port early so Xray can point to the final value.
-if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
-    ADG_DNS_PORT=$(grep "ADG_DNS_PORT" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-fi
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
-if systemctl is-active --quiet x-ui 2>/dev/null && [ -f /etc/x-ui/x-ui.db ]; then
-    warn "3x-ui уже установлен и работает. Пропускаем скрипт инсталляции."
+if systemctl is-active --quiet xray 2>/dev/null && [ -x /usr/local/bin/xray ]; then
+    warn "Xray уже установлен и работает. Перегенерируем конфиг."
 else
-    log "Установка 3x-ui без интерактивного мастера..."
-    install_xui_noninteractive
-    # Ожидание инициализации БД 3x-ui (до 10 секунд)
-    for i in $(seq 1 10); do [ -f /etc/x-ui/x-ui.db ] && break; sleep 1; done
-    [ -f /etc/x-ui/x-ui.db ] || err "БД 3x-ui не создана"
+    install_xray_core
+    # Ждём появления бинарника Xray (до 10 секунд)
+    for i in $(seq 1 10); do command -v xray >/dev/null 2>&1 && break; sleep 1; done
+    command -v xray >/dev/null 2>&1 || err "Бинарный файл xray не найден после установки"
 fi
 
-# Применяем credentials и защитный путь через встроенный binary CLI 3x-ui.
-XUI_BIN="$(resolve_xui_bin || true)"
-[ -n "$XUI_BIN" ] || err "Бинарный файл 3x-ui не найден после установки."
-"$XUI_BIN" setting -username "${PANEL_USER}" -password "${PANEL_PASS}" -port "${PANEL_PORT}" -webBasePath "${PANEL_PATH}" >/dev/null 2>&1 || err "Не удалось применить настройки 3x-ui через встроенный CLI."
-# Проверяем, есть ли уже инбаунды, чтобы не создавать дубликаты
-INBOUND_EXISTS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT count(*) FROM inbounds WHERE remark='VLESS-Reality-Default';")
-if [ "$INBOUND_EXISTS" -eq 0 ]; then
-    log "Создание дефолтного VLESS-Reality инбаунда..."
-    XRAY_BIN="$(resolve_xray_bin || true)"
-    if [ -n "$XRAY_BIN" ]; then
-        UUID=$(cat /proc/sys/kernel/random/uuid)
-        KEYS=$($XRAY_BIN x25519 2>&1)
-        PRIV_KEY=$(echo "$KEYS" | grep "Private key:" | cut -d' ' -f3)
-        PUB_KEY=$(echo "$KEYS" | grep "Public key:" | cut -d' ' -f3)
-        SHORT_ID=$(openssl rand -hex 8)
-        X_PORT=443
-        
-        SETTINGS="{\"clients\": [{\"id\": \"$UUID\", \"flow\": \"xtls-rprx-vision\"}], \"decryption\": \"none\", \"fallbacks\": []}"
-        STREAM_SETTINGS="{\"network\": \"tcp\", \"security\": \"reality\", \"realitySettings\": {\"show\": false, \"dest\": \"google.com:443\", \"proxyProtocol\": 0, \"serverNames\": [\"google.com\", \"www.google.com\"], \"privateKey\": \"$PRIV_KEY\", \"minClient\": \"\", \"maxClient\": \"\", \"maxTimeDiff\": 0, \"shortIds\": [\"$SHORT_ID\"]}, \"tcpSettings\": {\"header\": {\"type\": \"none\"}}}"
-        SNIFFING="{\"enabled\": true, \"destOverride\": [\"http\", \"tls\", \"quic\", \"fakedns\"]}"
-        
-        sqlite3 /etc/x-ui/x-ui.db "INSERT INTO inbounds (remark, enable, port, protocol, settings, stream_settings, tag, sniffing, listen) VALUES ('VLESS-Reality-Default', 1, $X_PORT, 'vless', '$SETTINGS', '$STREAM_SETTINGS', 'inbound-$X_PORT', '$SNIFFING', '');"
-        
-        VLESS_LINK="vless://$UUID@$SERVER_IP:$X_PORT?security=reality&encryption=none&pbk=$PUB_KEY&headerType=none&fp=chrome&spx=%2F&type=tcp&sni=google.com&sid=$SHORT_ID#VLESS-Reality-Default"
-    else
-        warn "Бинарный файл xray не найден, пропуск создания инбаунда."
-    fi
-else
-    # Если инбаунд уже есть, пытаемся достать его ссылку (упрощенно)
-    warn "Дефолтный инбаунд 3x-ui уже существует."
+XRAY_BIN="$(resolve_xray_bin || true)"
+[ -n "$XRAY_BIN" ] || err "Бинарный файл xray не найден после установки."
+
+if [ -z "$XRAY_PRIVATE_KEY" ] || [ -z "$XRAY_PUBLIC_KEY" ]; then
+    log "Генерация Reality credentials Xray..."
+    KEYS=$(xray x25519 2>&1)
+    XRAY_PRIVATE_KEY=$(echo "$KEYS" | grep "Private key:" | cut -d' ' -f3)
+    XRAY_PUBLIC_KEY=$(echo "$KEYS" | grep "Public key:" | cut -d' ' -f3)
 fi
 
-# Создание TProxy инбаунда для AmneziaWG (если не существует)
-TPROXY_EXISTS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT count(*) FROM inbounds WHERE remark='TProxy-Inbound';")
-if [ "$TPROXY_EXISTS" -eq 0 ]; then
-    log "Создание TProxy инбаунда для каскадной маршрутизации..."
-    T_PORT=12345
-    T_SETTINGS="{\"network\": \"tcp,udp\", \"followControl\": true}"
-    T_STREAM="{\"network\": \"tcp\", \"security\": \"none\", \"sockopt\": {\"tproxy\": \"tproxy\", \"mark\": 1}}"
-    T_SNIFFING="{\"enabled\": true, \"destOverride\": [\"http\", \"tls\", \"quic\", \"fakedns\"]}"
-    sqlite3 /etc/x-ui/x-ui.db "INSERT INTO inbounds (remark, enable, port, protocol, settings, stream_settings, tag, sniffing, listen) VALUES ('TProxy-Inbound', 1, $T_PORT, 'dokodemo-door', '$T_SETTINGS', '$T_STREAM', 'tproxy-in', '$T_SNIFFING', '127.0.0.1');"
-fi
+[ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
+[ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality."
+[ -n "$XRAY_SHORT_ID" ] || err "Не удалось сгенерировать shortId Reality."
 
-# Настройка Xray DNS на AdGuardHome (через xrayConfigTemplate)
-log "Связывание Xray DNS с AdGuardHome..."
-# Пытаемся внедрить DNS в шаблон конфига. Это сложная операция для sed, 
-# поэтому мы просто убеждаемся, что AGH указан в качестве upstream для Xray.
-sqlite3 /etc/x-ui/x-ui.db "DELETE FROM settings WHERE key='adguard_dns_port'; INSERT INTO settings (key, value) VALUES ('adguard_dns_port', '$ADG_DNS_PORT');" 2>/dev/null || true
-# Большинство новых версий 3x-ui поддерживают прямое указание DNS в настройках
-sqlite3 /etc/x-ui/x-ui.db "DELETE FROM settings WHERE key='xrayDNSConfig'; INSERT INTO settings (key, value) VALUES ('xrayDNSConfig', '{\"servers\":[\"127.0.0.1:$ADG_DNS_PORT\"]}');"
+write_xray_config
+systemctl restart xray
+systemctl is-active --quiet xray || err "Xray не запустился после настройки"
 
-systemctl restart x-ui
-sync_panel_path_from_xui
+VLESS_LINK="vless://$XRAY_UUID@$SERVER_IP:$XRAY_PORT?security=reality&encryption=none&pbk=$XRAY_PUBLIC_KEY&headerType=none&fp=chrome&spx=%2F&type=tcp&sni=google.com&sid=$XRAY_SHORT_ID#VLESS-Reality-Default"
 
 # ==============================================================================
 # 3. УСТАНОВКА AMNEZIAWG
@@ -623,16 +616,13 @@ else
 fi
 
 ufw default allow outgoing
-ufw allow 80/tcp
 ufw allow 443/tcp
 ufw allow ${ADG_PORT}/tcp
-ufw allow ${PANEL_PORT}/tcp
 ufw allow ${AWG_PORT}/udp
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
-
 if ! ss -tlnp | grep -q ':2244'; then
     log "Изменение порта SSH на 2244..."
     sed -i '/^#\?Port /d' /etc/ssh/sshd_config
@@ -648,35 +638,19 @@ if ! ss -tlnp | grep -q ':2244'; then
     fi
 fi
 
-# Настройка Fail2Ban для панелей
-log "Настройка Fail2Ban (3x-ui & AGH)..."
-# Создаем фильтр для 3x-ui (поиск неудачных попыток входа в логе)
-cat <<EOF > /etc/fail2ban/filter.d/x-ui.conf
-[Definition]
-failregex = .*Login (failed|error).*from <HOST>.*
-ignoreregex =
-EOF
-
+# Настройка Fail2Ban для SSH
+log "Настройка Fail2Ban (SSH)..."
 cat <<EOF > /etc/fail2ban/jail.d/vpn-bundle.local
-[x-ui]
+[sshd]
 enabled = true
-port = $PANEL_PORT
-filter = x-ui
-logpath = /var/log/vpn-setup.log
+port = 2244
+mode = aggressive
+backend = systemd
 maxretry = 5
-bantime = 1h
-
-[adguardhome]
-enabled = true
-port = $ADG_PORT
-filter = x-ui
-logpath = /var/log/vpn-setup.log
-maxretry = 5
+findtime = 10m
 bantime = 1h
 EOF
 systemctl restart fail2ban
-
-# ==============================================================================
 # 6. ОЧИСТКА И УДАЛЕНИЕ ИНСТРУМЕНТОВ СБОРКИ
 # ==============================================================================
 log "Удаление инструментов сборки (Hardening) и очистка кэша..."
@@ -699,9 +673,13 @@ cat <<CREDS > "$CREDS_FILE"
 # Generated: $(date -Iseconds)
 # ====================================
 SSH_PORT=2244
-PANEL_URL=${PANEL_SCHEME}://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/
-PANEL_USER=${PANEL_USER}
-PANEL_PASS=${PANEL_PASS}
+XRAY_PORT=443
+XRAY_CONFIG=/usr/local/etc/xray/config.json
+XRAY_UUID=${XRAY_UUID}
+XRAY_PRIVATE_KEY=${XRAY_PRIVATE_KEY}
+XRAY_PUBLIC_KEY=${XRAY_PUBLIC_KEY}
+XRAY_SHORT_ID=${XRAY_SHORT_ID}
+VLESS_LINK=${VLESS_LINK}
 ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
 ADG_USER=${ADG_USER}
 ADG_PASS=${ADG_PASS}
@@ -710,27 +688,16 @@ AWG_CLIENT_CONF=/root/amnezia_client.conf
 CREDS
 chmod 600 "$CREDS_FILE"
 
-[ -z "$PANEL_SCHEME" ] && PANEL_SCHEME="http"
-if [ "$PANEL_SCHEME" = "https" ]; then
-    PANEL_URL_NOTE="${RED}(ВНИМАНИЕ: HTTPS, при первом входе браузер может показать предупреждение сертификата)${RESET}"
-else
-    PANEL_URL_NOTE="${YELLOW}(ВНИМАНИЕ: HTTP, SSL-сертификат для панели не настроен)${RESET}"
-fi
 
 log "Установка и настройка успешно завершены!"
 echo -e "\n=================================================================="
 echo -e "${GREEN}SSH доступ:${RESET}"
 echo -e "Порт: ${YELLOW}2244${RESET}"
 
-echo -e "\n${GREEN}Панель 3x-ui:${RESET}"
-echo -e "URL: ${YELLOW}${PANEL_SCHEME}://${SERVER_IP}:${PANEL_PORT}/${PANEL_PATH}/${RESET} ${PANEL_URL_NOTE}"
-echo -e "User: ${YELLOW}${PANEL_USER}${RESET} / Pass: ${YELLOW}${PANEL_PASS}${RESET}"
-
-if [ ! -z "$VLESS_LINK" ]; then
-    echo -e "\n${GREEN}Дефолтная ссылка VLESS (Reality):${RESET}"
-    echo -e "${YELLOW}${VLESS_LINK}${RESET}"
-fi
-
+echo -e "\n${GREEN}Xray Reality:${RESET}"
+echo -e "Порт: ${YELLOW}443${RESET}"
+echo -e "Конфиг: ${YELLOW}/usr/local/etc/xray/config.json${RESET}"
+echo -e "Дефолтная ссылка VLESS (Reality): ${YELLOW}${VLESS_LINK}${RESET}"
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
 echo -e "DNS реальный порт: ${YELLOW}${ADG_DNS_PORT}${RESET} (клиент видит 10.8.0.1:53 через DNAT)"
