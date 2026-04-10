@@ -246,6 +246,13 @@ write_xray_config() {
 EOF
     chmod 644 "$config_file"
 }
+# Удаляет устаревшие статические правила iptables DNAT для DNS-порта 53 на awg0,
+# которые могли остаться от предыдущих версий скрипта (до переноса правил в PostUp/PostDown).
+cleanup_legacy_awg_dns_redirects() {
+    iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
+}
+
 ensure_swapfile() {
     local swapfile="/swapfile"
     local swap_size="1G"
