@@ -61,14 +61,17 @@ resolve_xray_bin() {
 # Поддерживает старый формат ("Private key:"/"Public key:") и
 # новый формат xray >= v26.3 ("PrivateKey:"/"Password (PublicKey):").
 _parse_x25519_output() {
-    local raw="$1"
-    # Новый формат (v26.3+): "PrivateKey: <val>" / "Password (PublicKey): <val>"
+    local raw
+    # Нормализуем CRLF до парсинга (защита от Windows-переносов строк)
+    raw=$(printf '%s' "$1" | tr -d '\r')
     local priv pub
-    priv=$(printf '%s\n' "$raw" | sed -nE 's/^PrivateKey:[[:space:]]*([A-Za-z0-9+/=_-]+).*/\1/p' | head -n1 | tr -d '\r')
-    pub=$(printf '%s\n'  "$raw" | sed -nE 's/^Password \(PublicKey\):[[:space:]]*([A-Za-z0-9+/=_-]+).*/\1/p' | head -n1 | tr -d '\r')
+    # Новый формат (v26.3+): "PrivateKey: <val>" / "Password (PublicKey): <val>"
+    # Используем '|' как разделитель sed, чтобы '/' в классе символов не ломал паттерн
+    priv=$(printf '%s\n' "$raw" | sed -nE 's|^PrivateKey:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
+    pub=$(printf '%s\n'  "$raw" | sed -nE 's|^Password \(PublicKey\):[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
     # Старый формат (до v26.3): "Private key: <val>" / "Public key: <val>"
-    [ -n "$priv" ] || priv=$(printf '%s\n' "$raw" | sed -nE 's/^Private key:[[:space:]]*([A-Za-z0-9+/=_-]+).*/\1/p' | head -n1 | tr -d '\r')
-    [ -n "$pub"  ] || pub=$(printf '%s\n'  "$raw" | sed -nE 's/^Public key:[[:space:]]*([A-Za-z0-9+/=_-]+).*/\1/p'  | head -n1 | tr -d '\r')
+    [ -n "$priv" ] || priv=$(printf '%s\n' "$raw" | sed -nE 's|^Private key:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
+    [ -n "$pub"  ] || pub=$(printf '%s\n'  "$raw" | sed -nE 's|^Public key:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p'  | head -n1)
     printf '%s\n%s' "$priv" "$pub"
 }
 
