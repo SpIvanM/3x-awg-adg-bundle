@@ -39,11 +39,26 @@ function Assert-NotMatch {
     }
 }
 
+function Assert-Contains {
+    param(
+        [string]$Text,
+        [string]$Needle,
+        [string]$Message
+    )
+
+    if ($Text.IndexOf($Needle, [System.StringComparison]::Ordinal) -lt 0) {
+        throw $Message
+    }
+}
+
 Assert-Match -Text $setup -Pattern 'install-release\.sh' -Message 'setup.sh must use the official Xray installer.'
 Assert-Match -Text $setup -Pattern '/usr/local/etc/xray/config\.json' -Message 'setup.sh must write the Xray config to the official path.'
 Assert-Match -Text $setup -Pattern 'systemctl enable xray' -Message 'setup.sh must enable the Xray service.'
 Assert-Match -Text $setup -Pattern 'systemctl restart xray' -Message 'setup.sh must restart Xray after writing the config.'
 Assert-Match -Text $setup -Pattern 'xray x25519 2>&1' -Message 'setup.sh must capture xray x25519 output from stderr as well as stdout to build a valid Reality link.'
+Assert-Contains -Text $setup -Needle "sed -nE 's/^Private key:[[:space:]]*//p'" -Message 'setup.sh must parse the Reality private key without relying on fixed field positions.'
+Assert-Contains -Text $setup -Needle "sed -nE 's/^Public key:[[:space:]]*//p'" -Message 'setup.sh must parse the Reality public key without relying on fixed field positions.'
+Assert-NotMatch -Text $setup -Pattern "cut -d' ' -f3" -Message 'setup.sh must not parse Reality keys with fixed-space cut.'
 Assert-Match -Text $setup -Pattern 'realitySettings' -Message 'setup.sh must generate a Reality inbound in the Xray config.'
 Assert-Match -Text $setup -Pattern 'vless://' -Message 'setup.sh must still print a VLESS Reality link.'
 Assert-Match -Text $setup -Pattern 'upstream_dns:\r?\n\s+- 1\.1\.1\.1\r?\n\s+- 8\.8\.8\.8' -Message 'setup.sh must use plain IP upstream DNS servers that current AdGuardHome accepts without bootstrap rewrites.'

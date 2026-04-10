@@ -357,8 +357,8 @@ XRAY_BIN="$(resolve_xray_bin || true)"
 if [ -z "$XRAY_PRIVATE_KEY" ] || [ -z "$XRAY_PUBLIC_KEY" ]; then
     log "Генерация Reality credentials Xray..."
     KEYS=$(xray x25519 2>&1)
-    XRAY_PRIVATE_KEY=$(echo "$KEYS" | grep "Private key:" | cut -d' ' -f3)
-    XRAY_PUBLIC_KEY=$(echo "$KEYS" | grep "Public key:" | cut -d' ' -f3)
+    XRAY_PRIVATE_KEY=$(printf '%s\n' "$KEYS" | sed -nE 's/^Private key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+    XRAY_PUBLIC_KEY=$(printf '%s\n' "$KEYS" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
 fi
 
 [ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
