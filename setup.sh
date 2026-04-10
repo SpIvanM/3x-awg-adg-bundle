@@ -58,24 +58,36 @@ resolve_xray_bin() {
 }
 
 generate_reality_keys() {
-    local raw_output fallback_private_key fallback_output
+    local raw_output _attempt
 
-    raw_output="$("$XRAY_BIN" x25519 2>&1 || true)"
-    XRAY_PRIVATE_KEY=$(printf '%s\n' "$raw_output" | sed -nE 's/^Private key:[[:space:]]*//p' | head -n1 | tr -d '\r')
-    XRAY_PUBLIC_KEY=$(printf '%s\n' "$raw_output" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+    # Retry loop: xray binary may not be fully ready immediately after install
+    for _attempt in 1 2 3; do
+        raw_output="$("$XRAY_BIN" x25519 2>&1 || true)"
+        # Primary parse: sed (matches "Private key: <val>" at line start)
+        XRAY_PRIVATE_KEY=$(printf '%s\n' "$raw_output" | sed -nE 's/^Private key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+        XRAY_PUBLIC_KEY=$(printf '%s\n' "$raw_output"  | sed -nE 's/^Public key:[[:space:]]*//p'  | head -n1 | tr -d '\r')
+        # Fallback parse: grep (handles minor format drift or whitespace variation)
+        [ -n "$XRAY_PRIVATE_KEY" ] || XRAY_PRIVATE_KEY=$(printf '%s\n' "$raw_output" | grep -oP '(?i)(?<=private key:[ \t]{0,4})[A-Za-z0-9+/=_-]{20,}' | head -n1)
+        [ -n "$XRAY_PUBLIC_KEY"  ] || XRAY_PUBLIC_KEY=$(printf '%s\n'  "$raw_output" | grep -oP '(?i)(?<=public key:[ \t]{0,4})[A-Za-z0-9+/=_-]{20,}'  | head -n1)
+        if [ -n "$XRAY_PRIVATE_KEY" ] && [ -n "$XRAY_PUBLIC_KEY" ]; then
+            return 0
+        fi
+        warn "Попытка ${_attempt}/3: xray x25519 вернул неожиданный вывод. Ждём 1с..."
+        warn "Сырой вывод xray x25519: $(printf '%s' "$raw_output" | head -c 400)"
+        sleep 1
+    done
 
-    if [ -n "$XRAY_PRIVATE_KEY" ] && [ -n "$XRAY_PUBLIC_KEY" ]; then
-        return 0
-    fi
-
-    warn "Не удалось распознать стандартный вывод xray x25519. Используем fallback Reality seed."
-    fallback_private_key=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
-    fallback_output="$("$XRAY_BIN" x25519 -i "$fallback_private_key" 2>&1 || true)"
-    XRAY_PRIVATE_KEY="$fallback_private_key"
-    XRAY_PUBLIC_KEY=$(printf '%s\n' "$fallback_output" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+    # Hard fallback: generate private key via openssl, derive public key via xray
+    warn "Все попытки xray x25519 без ключа провалились. Используем openssl-fallback."
+    local fallback_priv fallback_out
+    fallback_priv=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+    fallback_out="$("$XRAY_BIN" x25519 -i "$fallback_priv" 2>&1 || true)"
+    XRAY_PRIVATE_KEY="$fallback_priv"
+    XRAY_PUBLIC_KEY=$(printf '%s\n' "$fallback_out" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+    [ -n "$XRAY_PUBLIC_KEY" ] || XRAY_PUBLIC_KEY=$(printf '%s\n' "$fallback_out" | grep -oP '(?i)(?<=public key:[ \t]{0,4})[A-Za-z0-9+/=_-]{20,}' | head -n1)
 
     [ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
-    [ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality."
+    [ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality. Вывод: $(printf '%s' "$fallback_out" | head -c 400)"
 }
 
 write_xray_config() {
@@ -317,6 +329,8 @@ if [ "$SKIP_APT" -eq 0 ]; then
 fi
 
 log "Оптимизация sysctl (сеть, BBR, лимиты)..."
+# Удаляем устаревший файл (может содержать ключи из прошлых версий скрипта)
+rm -f /etc/sysctl.d/99-custom-net.conf
 cat <<EOF > /etc/sysctl.d/99-custom-net.conf
 fs.file-max = 1048576
 net.core.rmem_max = 67108864
@@ -335,7 +349,7 @@ net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.ip_forward = 1
 EOF
-sysctl --system > /dev/null
+sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || true
 
 # ==============================================================================
 # 2. УСТАНОВКА XRAY
