@@ -57,37 +57,44 @@ resolve_xray_bin() {
     command -v xray 2>/dev/null || true
 }
 
+# Парсит вывод xray x25519 в переменные XRAY_PRIVATE_KEY и XRAY_PUBLIC_KEY.
+# Поддерживает старый формат ("Private key:"/"Public key:") и
+# новый формат xray >= v26.3 ("PrivateKey:"/"Password (PublicKey):").
+_parse_x25519_output() {
+    local raw="$1"
+    # Новый формат (v26.3+): "PrivateKey: <val>" / "Password (PublicKey): <val>"
+    local priv pub
+    priv=$(printf '%s\n' "$raw" | sed -nE 's/^PrivateKey:[[:space:]]*([A-Za-z0-9+/=_-]+).*/\1/p' | head -n1 | tr -d '\r')
+    pub=$(printf '%s\n'  "$raw" | sed -nE 's/^Password \(PublicKey\):[[:space:]]*([A-Za-z0-9+/=_-]+).*/\1/p' | head -n1 | tr -d '\r')
+    # Старый формат (до v26.3): "Private key: <val>" / "Public key: <val>"
+    [ -n "$priv" ] || priv=$(printf '%s\n' "$raw" | sed -nE 's/^Private key:[[:space:]]*([A-Za-z0-9+/=_-]+).*/\1/p' | head -n1 | tr -d '\r')
+    [ -n "$pub"  ] || pub=$(printf '%s\n'  "$raw" | sed -nE 's/^Public key:[[:space:]]*([A-Za-z0-9+/=_-]+).*/\1/p'  | head -n1 | tr -d '\r')
+    printf '%s\n%s' "$priv" "$pub"
+}
+
 generate_reality_keys() {
-    local raw_output _attempt
+    local raw_output priv_pub
 
-    # Retry loop: xray binary may not be fully ready immediately after install
-    for _attempt in 1 2 3; do
-        raw_output="$("$XRAY_BIN" x25519 2>&1 || true)"
-        # Primary parse: sed (matches "Private key: <val>" at line start)
-        XRAY_PRIVATE_KEY=$(printf '%s\n' "$raw_output" | sed -nE 's/^Private key:[[:space:]]*//p' | head -n1 | tr -d '\r')
-        XRAY_PUBLIC_KEY=$(printf '%s\n' "$raw_output"  | sed -nE 's/^Public key:[[:space:]]*//p'  | head -n1 | tr -d '\r')
-        # Fallback parse: grep (handles minor format drift or whitespace variation)
-        [ -n "$XRAY_PRIVATE_KEY" ] || XRAY_PRIVATE_KEY=$(printf '%s\n' "$raw_output" | grep -oP '(?i)(?<=private key:[ \t]{0,4})[A-Za-z0-9+/=_-]{20,}' | head -n1)
-        [ -n "$XRAY_PUBLIC_KEY"  ] || XRAY_PUBLIC_KEY=$(printf '%s\n'  "$raw_output" | grep -oP '(?i)(?<=public key:[ \t]{0,4})[A-Za-z0-9+/=_-]{20,}'  | head -n1)
-        if [ -n "$XRAY_PRIVATE_KEY" ] && [ -n "$XRAY_PUBLIC_KEY" ]; then
-            return 0
-        fi
-        warn "Попытка ${_attempt}/3: xray x25519 вернул неожиданный вывод. Ждём 1с..."
-        warn "Сырой вывод xray x25519: $(printf '%s' "$raw_output" | head -c 400)"
-        sleep 1
-    done
+    raw_output="$("$XRAY_BIN" x25519 2>&1 || true)"
+    priv_pub=$(_parse_x25519_output "$raw_output")
+    XRAY_PRIVATE_KEY=$(printf '%s\n' "$priv_pub" | sed -n '1p')
+    XRAY_PUBLIC_KEY=$(printf '%s\n'  "$priv_pub" | sed -n '2p')
 
-    # Hard fallback: generate private key via openssl, derive public key via xray
-    warn "Все попытки xray x25519 без ключа провалились. Используем openssl-fallback."
-    local fallback_priv fallback_out
+    if [ -n "$XRAY_PRIVATE_KEY" ] && [ -n "$XRAY_PUBLIC_KEY" ]; then
+        return 0
+    fi
+
+    warn "xray x25519 вернул нераспознанный вывод. Пробуем openssl-fallback."
+    warn "Сырой вывод: $(printf '%s' "$raw_output" | head -c 400)"
+    local fallback_priv fallback_out fallback_pub
     fallback_priv=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
     fallback_out="$("$XRAY_BIN" x25519 -i "$fallback_priv" 2>&1 || true)"
+    fallback_pub=$(printf '%s\n' "$(_parse_x25519_output "$fallback_out")" | sed -n '2p')
     XRAY_PRIVATE_KEY="$fallback_priv"
-    XRAY_PUBLIC_KEY=$(printf '%s\n' "$fallback_out" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
-    [ -n "$XRAY_PUBLIC_KEY" ] || XRAY_PUBLIC_KEY=$(printf '%s\n' "$fallback_out" | grep -oP '(?i)(?<=public key:[ \t]{0,4})[A-Za-z0-9+/=_-]{20,}' | head -n1)
+    XRAY_PUBLIC_KEY="$fallback_pub"
 
     [ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
-    [ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality. Вывод: $(printf '%s' "$fallback_out" | head -c 400)"
+    [ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality. Вывод xray: $(printf '%s' "$fallback_out" | head -c 400)"
 }
 
 write_xray_config() {
@@ -392,7 +399,7 @@ XRAY_BIN="$(resolve_xray_bin || true)"
 if [ -n "$XRAY_PRIVATE_KEY" ] && [ -z "$XRAY_PUBLIC_KEY" ]; then
     log "В credentials Xray найден private key Reality, восстанавливаем public key..."
     DERIVED_OUTPUT="$("$XRAY_BIN" x25519 -i "$XRAY_PRIVATE_KEY" 2>&1 || true)"
-    XRAY_PUBLIC_KEY=$(printf '%s\n' "$DERIVED_OUTPUT" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+    XRAY_PUBLIC_KEY=$(printf '%s\n' "$(_parse_x25519_output "$DERIVED_OUTPUT")" | sed -n '2p')
 fi
 
 if [ -z "$XRAY_PRIVATE_KEY" ] || [ -z "$XRAY_PUBLIC_KEY" ]; then
