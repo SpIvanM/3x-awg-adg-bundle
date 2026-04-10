@@ -57,6 +57,27 @@ resolve_xray_bin() {
     command -v xray 2>/dev/null || true
 }
 
+generate_reality_keys() {
+    local raw_output fallback_private_key fallback_output
+
+    raw_output="$("$XRAY_BIN" x25519 2>&1 || true)"
+    XRAY_PRIVATE_KEY=$(printf '%s\n' "$raw_output" | sed -nE 's/^Private key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+    XRAY_PUBLIC_KEY=$(printf '%s\n' "$raw_output" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+
+    if [ -n "$XRAY_PRIVATE_KEY" ] && [ -n "$XRAY_PUBLIC_KEY" ]; then
+        return 0
+    fi
+
+    warn "Не удалось распознать стандартный вывод xray x25519. Используем fallback Reality seed."
+    fallback_private_key=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+    fallback_output="$("$XRAY_BIN" x25519 -i "$fallback_private_key" 2>&1 || true)"
+    XRAY_PRIVATE_KEY="$fallback_private_key"
+    XRAY_PUBLIC_KEY=$(printf '%s\n' "$fallback_output" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+
+    [ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
+    [ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality."
+}
+
 write_xray_config() {
     local config_dir="/usr/local/etc/xray"
     local config_file="${config_dir}/config.json"
@@ -354,11 +375,15 @@ fi
 XRAY_BIN="$(resolve_xray_bin || true)"
 [ -n "$XRAY_BIN" ] || err "Бинарный файл xray не найден после установки."
 
+if [ -n "$XRAY_PRIVATE_KEY" ] && [ -z "$XRAY_PUBLIC_KEY" ]; then
+    log "В credentials Xray найден private key Reality, восстанавливаем public key..."
+    DERIVED_OUTPUT="$("$XRAY_BIN" x25519 -i "$XRAY_PRIVATE_KEY" 2>&1 || true)"
+    XRAY_PUBLIC_KEY=$(printf '%s\n' "$DERIVED_OUTPUT" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+fi
+
 if [ -z "$XRAY_PRIVATE_KEY" ] || [ -z "$XRAY_PUBLIC_KEY" ]; then
     log "Генерация Reality credentials Xray..."
-    KEYS=$(xray x25519 2>&1)
-    XRAY_PRIVATE_KEY=$(printf '%s\n' "$KEYS" | sed -nE 's/^Private key:[[:space:]]*//p' | head -n1 | tr -d '\r')
-    XRAY_PUBLIC_KEY=$(printf '%s\n' "$KEYS" | sed -nE 's/^Public key:[[:space:]]*//p' | head -n1 | tr -d '\r')
+    generate_reality_keys
 fi
 
 [ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
