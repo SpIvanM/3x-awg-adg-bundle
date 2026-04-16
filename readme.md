@@ -51,9 +51,11 @@ graph TD
 
 - Устанавливает Xray-core через официальный installer.
 - Пишет конфиг в `/usr/local/etc/xray/config.json`.
+- Удаляет legacy `x-ui`, если он остался от предыдущих версий, чтобы не было split-brain control plane.
 - Поднимает `VLESS + Reality + Vision` inbound на `443`.
 - Генерирует и печатает `vless://` ссылку.
 - Настраивает AmneziaWG, TProxy, DNS DNAT и AdGuardHome.
+- Оставляет клиентский профиль AmneziaWG IPv4-only (`AllowedIPs = 0.0.0.0/0`) до полноценной реализации IPv6-маршрутизации.
 - Включает базовое hardening: `UFW`, `Fail2Ban`, `BBR`, `sysctl`, SSH на `2244`.
 
 ### Установка
@@ -118,9 +120,11 @@ graph TD
 
 - Installs Xray-core using the official installer.
 - Writes the config to `/usr/local/etc/xray/config.json`.
+- Removes legacy `x-ui` leftovers on re-runs so the host keeps a single Xray control plane.
 - Creates a `VLESS + Reality + Vision` inbound on port `443`.
 - Prints a `vless://` link.
 - Sets up AmneziaWG, TProxy, DNS DNAT, and AdGuardHome.
+- Ships the AmneziaWG client profile as IPv4-only (`AllowedIPs = 0.0.0.0/0`) until IPv6 routing is implemented intentionally.
 - Enables baseline hardening: `UFW`, `Fail2Ban`, `BBR`, `sysctl`, SSH on `2244`.
 
 ### Install

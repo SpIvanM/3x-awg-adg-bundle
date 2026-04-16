@@ -100,169 +100,192 @@ generate_reality_keys() {
     [ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality. Вывод xray: $(printf '%s' "$fallback_out" | head -c 400)"
 }
 
-# Настраивает Xray через x-ui SQLite DB:
-# - Добавляет/обновляет Reality/VLESS inbound на порту 443
-# - Добавляет/обновляет TProxy inbound на порту T_PORT
-# - Устанавливает DNS (udp://127.0.0.1:ADG_DNS_PORT) и routing-правила в xrayTemplateConfig
-# x-ui при перезапуске читает инбаунды из DB и template, генерирует bin/config.json.
-configure_xray_via_xui_db() {
-    local db="/etc/x-ui/x-ui.db"
-    if [ ! -f "$db" ]; then
-        err "x-ui DB не найдена: $db. x-ui не установлен?"
-    fi
+remove_legacy_xui() {
+    systemctl stop x-ui 2>/dev/null || true
+    systemctl disable x-ui 2>/dev/null || true
+    rm -f /etc/systemd/system/x-ui.service
+    rm -rf /usr/local/x-ui /etc/x-ui
+    systemctl daemon-reload >/dev/null 2>&1 || true
+}
 
-    log "Настройка Xray через x-ui DB ($db)..."
+write_xray_config() {
+    mkdir -p /usr/local/etc/xray
 
-    python3 - <<PYEOF
-import sqlite3, json, sys
-
-db_path = "${db}"
-uuid = "${XRAY_UUID}"
-priv_key = "${XRAY_PRIVATE_KEY}"
-short_id = "${XRAY_SHORT_ID}"
-adg_dns_port = ${ADG_DNS_PORT}
-t_port = ${T_PORT}
-
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
-
-# Получаем user_id из существующих записей
-cur.execute("SELECT user_id FROM inbounds LIMIT 1")
-row = cur.fetchone()
-user_id = row[0] if row else 1
-
-# --- Reality/VLESS inbound на порту 443 ---
-reality_settings = json.dumps({
-    "clients": [{
-        "email": "reality-default",
-        "flow": "xtls-rprx-vision",
-        "id": uuid
-    }],
-    "decryption": "none"
-})
-reality_stream = json.dumps({
-    "network": "tcp",
-    "security": "reality",
-    "realitySettings": {
-        "dest": "google.com:443",
-        "privateKey": priv_key,
-        "serverNames": ["google.com", "www.google.com"],
-        "shortIds": [short_id],
-        "show": False,
-        "xver": 0
+    cat <<EOF > /usr/local/etc/xray/config.json
+{
+  "log": {
+    "access": "none",
+    "dnsLog": false,
+    "error": "",
+    "loglevel": "warning",
+    "maskAddress": ""
+  },
+  "dns": {
+    "servers": [
+      "udp://127.0.0.1:${ADG_DNS_PORT}"
+    ],
+    "queryStrategy": "UseIPv4"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": ${XRAY_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "email": "reality-default",
+            "flow": "xtls-rprx-vision",
+            "id": "${XRAY_UUID}"
+          }
+        ],
+        "decryption": "none"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ],
+        "enabled": true,
+        "metadataOnly": true,
+        "routeOnly": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "google.com:443",
+          "privateKey": "${XRAY_PRIVATE_KEY}",
+          "serverNames": [
+            "google.com",
+            "www.google.com"
+          ],
+          "shortIds": [
+            "${XRAY_SHORT_ID}"
+          ],
+          "show": false,
+          "xver": 0
+        },
+        "tcpSettings": {
+          "header": {
+            "type": "none"
+          }
+        }
+      },
+      "tag": "inbound-443"
     },
-    "tcpSettings": {"header": {"type": "none"}}
-})
-reality_sniffing = json.dumps({
-    "enabled": True,
-    "destOverride": ["http", "tls", "quic", "fakedns"],
-    "metadataOnly": True,
-    "routeOnly": True
-})
-
-cur.execute("SELECT id FROM inbounds WHERE port = 443")
-if cur.fetchone():
-    cur.execute("""
-        UPDATE inbounds SET protocol=?, settings=?, stream_settings=?, sniffing=?, enable=1, tag=?, listen=''
-        WHERE port = 443
-    """, ('vless', reality_settings, reality_stream, reality_sniffing, 'inbound-443'))
-    print("[xui-db] Reality inbound (port 443): updated")
-else:
-    cur.execute("""
-        INSERT INTO inbounds
-            (user_id, up, down, total, remark, enable, expiry_time, listen, port,
-             protocol, settings, stream_settings, tag, sniffing)
-        VALUES (?,0,0,0,?,1,0,'',?,?,?,?,?,?)
-    """, (user_id, 'Reality-443', 443, 'vless',
-           reality_settings, reality_stream, 'inbound-443', reality_sniffing))
-    print("[xui-db] Reality inbound (port 443): inserted")
-
-# --- TProxy inbound ---
-tproxy_settings = json.dumps({
-    "network": "tcp,udp",
-    "followRedirect": True
-})
-tproxy_stream = json.dumps({
-    "network": "tcp",
-    "security": "none",
-    "sockopt": {"tproxy": "tproxy", "mark": 1}
-})
-tproxy_sniffing = json.dumps({
-    "enabled": True,
-    "destOverride": ["http", "tls", "quic", "fakedns"]
-})
-
-cur.execute("SELECT id FROM inbounds WHERE tag = 'tproxy-in'")
-if cur.fetchone():
-    cur.execute("""
-        UPDATE inbounds SET port=?, settings=?, stream_settings=?, sniffing=?, enable=1, listen='127.0.0.1'
-        WHERE tag = 'tproxy-in'
-    """, (t_port, tproxy_settings, tproxy_stream, tproxy_sniffing))
-    print(f"[xui-db] TProxy inbound (port {t_port}): updated")
-else:
-    cur.execute("""
-        INSERT INTO inbounds
-            (user_id, up, down, total, remark, enable, expiry_time, listen, port,
-             protocol, settings, stream_settings, tag, sniffing)
-        VALUES (?,0,0,0,?,1,0,'127.0.0.1',?,?,?,?,?,?)
-    """, (user_id, 'TProxy-Inbound', t_port, 'dokodemo-door',
-           tproxy_settings, tproxy_stream, 'tproxy-in', tproxy_sniffing))
-    print(f"[xui-db] TProxy inbound (port {t_port}): inserted")
-
-# --- DNS config в x-ui settings ---
-dns_val = json.dumps({"servers": [f"udp://127.0.0.1:{adg_dns_port}"]})
-cur.execute("SELECT key FROM settings WHERE key = 'xrayDNSConfig'")
-if cur.fetchone():
-    cur.execute("UPDATE settings SET value=? WHERE key='xrayDNSConfig'", (dns_val,))
-else:
-    cur.execute("INSERT INTO settings (key,value) VALUES ('xrayDNSConfig',?)", (dns_val,))
-print(f"[xui-db] xrayDNSConfig: set to udp://127.0.0.1:{adg_dns_port}")
-
-# --- xrayTemplateConfig: routing + dns ---
-cur.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'")
-row = cur.fetchone()
-tmpl = json.loads(row[0]) if (row and row[0]) else {}
-
-tmpl["dns"] = {"servers": [f"udp://127.0.0.1:{adg_dns_port}"]}
-
-if "routing" not in tmpl:
-    tmpl["routing"] = {"domainStrategy": "AsIs", "rules": []}
-
-rules = tmpl["routing"].get("rules", [])
-
-# Убеждаемся что правила tproxy-in->direct и inbound-443->direct есть и стоят первыми
-rules = [r for r in rules
-         if not (r.get("inboundTag") and
-                 any(t in r["inboundTag"] for t in ["tproxy-in", "inbound-443"]))]
-rules = [
-    {"type": "field", "inboundTag": ["tproxy-in"],   "outboundTag": "direct"},
-    {"type": "field", "inboundTag": ["inbound-443"], "outboundTag": "direct"},
-] + rules
-
-# Сохраняем стандартные blocked-правила если их нет
-def has_rule(lst, **kw):
-    return any(all(r.get(k)==v for k,v in kw.items()) for r in lst)
-
-if not has_rule(rules, outboundTag="blocked"):
-    rules += [
-        {"type": "field", "outboundTag": "blocked", "ip": ["geoip:private"]},
-        {"type": "field", "outboundTag": "blocked", "protocol": ["bittorrent"]},
+    {
+      "listen": "0.0.0.0",
+      "port": ${T_PORT},
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1",
+        "followRedirect": true,
+        "network": "tcp,udp"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ],
+        "enabled": true,
+        "metadataOnly": true,
+        "routeOnly": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 1,
+          "tproxy": "tproxy"
+        }
+      },
+      "tag": "tproxy-in"
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "AsIs"
+      },
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "settings": {},
+      "tag": "blocked"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "tproxy-in"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "inbound-443"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "outboundTag": "blocked",
+        "ip": [
+          "geoip:private"
+        ]
+      },
+      {
+        "type": "field",
+        "outboundTag": "blocked",
+        "protocol": [
+          "bittorrent"
+        ]
+      }
     ]
+  }
+}
+EOF
+}
 
-tmpl["routing"]["rules"] = rules
+cleanup_legacy_adguard_units() {
+    systemctl stop AdGuardHome 2>/dev/null || true
+    systemctl stop adguardhome 2>/dev/null || true
+    systemctl disable adguardhome 2>/dev/null || true
+    rm -f /etc/systemd/system/adguardhome.service
+    rm -rf /etc/systemd/system/adguardhome.service.d
+    systemctl daemon-reload >/dev/null 2>&1 || true
+}
 
-tmpl_val = json.dumps(tmpl)
-cur.execute("SELECT key FROM settings WHERE key='xrayTemplateConfig'")
-if cur.fetchone():
-    cur.execute("UPDATE settings SET value=? WHERE key='xrayTemplateConfig'", (tmpl_val,))
-else:
-    cur.execute("INSERT INTO settings (key,value) VALUES ('xrayTemplateConfig',?)", (tmpl_val,))
-print("[xui-db] xrayTemplateConfig: routing + dns configured")
+ensure_awg_build_dependencies() {
+    local header_pkg="linux-headers-$(uname -r)"
 
-conn.commit()
-conn.close()
-print("[xui-db] Done.")
-PYEOF
+    apt install -y git build-essential dkms libmnl-dev libelf-dev "$header_pkg" \
+        || err "Не удалось установить точные kernel headers (${header_pkg}) для сборки AmneziaWG."
+}
+
+validate_stack() {
+    local agh_service_name="$1"
+
+    log "Валидация Xray, AmneziaWG и AdGuardHome..."
+    xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
+    systemctl restart xray || err "Не удалось перезапустить xray."
+    systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0 после настройки."
+    systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
+
+    ss -lntup | grep -Eq ':443 ' || err "Xray не слушает порт 443."
+    ss -lntup | grep -Eq ':12345 ' || err "Xray не слушает TProxy порт 12345."
+    ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
+    dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
+    awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
 }
 # Удаляет устаревшие статические правила iptables DNAT для DNS-порта 53 на awg0,
 # которые могли остаться от предыдущих версий скрипта (до переноса правил в PostUp/PostDown).
@@ -333,22 +356,17 @@ if [ "$SKIP_APT" -eq 0 ]; then
 
     log "Обновление системы и установка базовых пакетов..."
     apt update && apt upgrade -y
-    # Устанавливаем инструменты сборки (build-essential, git, libelf-dev) для AmneziaWG.
-    # Они будут удалены в конце скрипта для повышения безопасности.
-    if grep -qi "ubuntu" /etc/os-release; then
-        LINUX_HEADERS="linux-headers-generic"
-    else
-        LINUX_HEADERS="linux-headers-amd64"
-    fi
-
-    apt install -y curl wget git mc ufw fail2ban nano iptables iptables-persistent \
-                   build-essential dkms $LINUX_HEADERS jq openssl libmnl-dev sqlite3 libelf-dev whois qrencode
+    # Базовые пакеты и точные headers текущего ядра для детерминированной сборки AWG.
+    apt install -y curl wget mc ufw fail2ban nano iptables iptables-persistent \
+                   jq openssl whois qrencode dnsutils "linux-headers-$(uname -r)" \
+        || err "Не удалось установить обязательные пакеты и точные kernel headers для $(uname -r)."
     # Обновляем дату последнего полного запуска
     date +%Y-%m-%d > "$LAST_RUN_FILE"
 else
-    log "Пропуск apt-операций (fast mode). Убеждаемся в наличии jq и openssl..."
+    log "Пропуск apt-операций (fast mode). Убеждаемся в наличии jq, openssl и dig..."
     command -v jq >/dev/null 2>&1 || apt install -y jq
     command -v openssl >/dev/null 2>&1 || apt install -y openssl
+    command -v dig >/dev/null 2>&1 || apt install -y dnsutils
 fi
 
 if [ "$SKIP_APT" -eq 0 ]; then
@@ -439,22 +457,12 @@ fi
 [ -n "$XRAY_SHORT_ID" ] || err "Не удалось сгенерировать shortId Reality."
 
 # ==============================================================================
-# 3. УСТАНОВКА 3X-UI (управляет xray)
+# 3. ОЧИСТКА LEGACY XRAY CONTROL PLANE
 # ==============================================================================
-log "Проверка и установка 3x-ui..."
-if systemctl is-active --quiet x-ui 2>/dev/null && [ -f /etc/x-ui/x-ui.db ]; then
-    warn "3x-ui уже установлен и работает."
-else
-    log "Установка 3x-ui через официальный инсталлятор..."
-    bash -c "$(curl -fsSL https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh)" @ install --no-confirm 2>/dev/null \
-        || bash -c "$(curl -fsSL https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh)"
-    # Ждём появления DB (до 15с)
-    for _i in $(seq 1 15); do [ -f /etc/x-ui/x-ui.db ] && break; sleep 1; done
-    [ -f /etc/x-ui/x-ui.db ] || err "x-ui DB не найдена после установки. Проверьте: journalctl -u x-ui -n 50"
-    systemctl enable x-ui >/dev/null 2>&1 || true
-fi
+log "Удаление legacy x-ui, если он остался от предыдущих версий..."
+remove_legacy_xui
 
-VLESS_LINK="vless://$XRAY_UUID@$SERVER_IP:$XRAY_PORT?security=reality&encryption=none&pbk=$XRAY_PUBLIC_KEY&headerType=none&fp=chrome&spx=%2F&type=tcp&sni=google.com&sid=$XRAY_SHORT_ID#VLESS-Reality-Default"
+VLESS_LINK="vless://$XRAY_UUID@$SERVER_IP:$XRAY_PORT?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&pbk=$XRAY_PUBLIC_KEY&headerType=none&fp=chrome&spx=%2F&sni=google.com&sid=$XRAY_SHORT_ID#VLESS-Reality-Default"
 
 # ==============================================================================
 # 5. УСТАНОВКА AMNEZIAWG
@@ -463,6 +471,7 @@ log "Проверка AmneziaWG..."
 if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
     warn "AmneziaWG уже настроен, пропускаем переустановку."
 else
+    ensure_awg_build_dependencies
     if grep -qi "ubuntu" /etc/os-release; then
         log "Используем PPA для Ubuntu..."
         apt install -y software-properties-common python3-launchpadlib gnupg2
@@ -537,9 +546,18 @@ PostUp = ip rule add fwmark 1 table 100 2>/dev/null || true
 PostUp = ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 PostUp = iptables -t mangle -N AWG_TPROXY 2>/dev/null || true
 PostUp = iptables -t mangle -F AWG_TPROXY
-PostUp = iptables -t mangle -A AWG_TPROXY -d 10.8.0.0/24 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 0.0.0.0/8 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 10.0.0.0/8 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 100.64.0.0/10 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 169.254.0.0/16 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 172.16.0.0/12 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 192.168.0.0/16 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 224.0.0.0/4 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 240.0.0.0/4 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d $SERVER_IP -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 127.0.0.0/8 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -p udp --dport 53 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -p tcp --dport 53 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
@@ -561,9 +579,7 @@ EOF
 
 cleanup_legacy_awg_dns_redirects
 systemctl enable awg-quick@awg0
-set +e
-systemctl restart awg-quick@awg0 || warn "Модуль ядра не загружен. Требуется reboot!"
-set -e
+systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0. Проверьте сборку модуля AmneziaWG для $(uname -r)."
 
 # Конфигурация клиента
 cat <<EOF > /root/amnezia_client.conf
@@ -585,7 +601,7 @@ H4 = $H4
 PublicKey = $SERVER_PUB
 PresharedKey = $CLIENT_PSK
 Endpoint = $SERVER_IP:$AWG_PORT
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 chmod 600 /root/amnezia_client.conf
@@ -624,8 +640,8 @@ fi
 # Всегда перезаписываем конфиг (новые порт, логин, пароль)
 log "Применение конфигурации AdGuardHome..."
 
-# Останавливаем AGH (пробуем оба возможных имени юнита)
-systemctl stop AdGuardHome 2>/dev/null || systemctl stop adguardhome 2>/dev/null || true
+# Останавливаем активные инстансы и удаляем legacy lower-case unit.
+cleanup_legacy_adguard_units
 
 cat <<EOF > /opt/AdGuardHome/AdGuardHome.yaml
 http:
@@ -670,24 +686,16 @@ filters:
     id: 2
 EOF
 
-# Регистрируем systemd-юнит если он ещё не существует
-# AGH умеет делать это сам через флаг -s install
-AGH_SVC_NAME=""
-if systemctl list-unit-files 2>/dev/null | grep -qi 'AdGuardHome\.service'; then
-    AGH_SVC_NAME="AdGuardHome"
-elif systemctl list-unit-files 2>/dev/null | grep -qi 'adguardhome\.service'; then
-    AGH_SVC_NAME="adguardhome"
-else
+# Регистрируем systemd-юнит AdGuardHome. Используем одно canonical имя сервиса.
+AGH_SVC_NAME="AdGuardHome"
+if ! systemctl list-unit-files 2>/dev/null | grep -qi 'AdGuardHome\.service'; then
     log "Регистрация AdGuardHome в systemd..."
     /opt/AdGuardHome/AdGuardHome -s install 2>/dev/null || true
     systemctl daemon-reload
-    if systemctl list-unit-files 2>/dev/null | grep -qi 'AdGuardHome\.service'; then
-        AGH_SVC_NAME="AdGuardHome"
-    elif systemctl list-unit-files 2>/dev/null | grep -qi 'adguardhome\.service'; then
-        AGH_SVC_NAME="adguardhome"
-    else
-        # Fallback: создаём юнит вручную
-        cat <<UNIT > /etc/systemd/system/adguardhome.service
+fi
+
+if ! systemctl list-unit-files 2>/dev/null | grep -qi 'AdGuardHome\.service'; then
+    cat <<UNIT > /etc/systemd/system/AdGuardHome.service
 [Unit]
 Description=AdGuard Home: Network-level blocker
 After=syslog.target network-online.target
@@ -702,9 +710,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
-        systemctl daemon-reload
-        AGH_SVC_NAME="adguardhome"
-    fi
+    systemctl daemon-reload
 fi
 
 # Добавляем override: запускать ПОСЛЕ awg0
@@ -733,18 +739,18 @@ else
     warn "AdGuardHome НЕ слушает на порту ${ADG_DNS_PORT}! Проверьте: journalctl -u ${AGH_SVC_NAME} -n 50"
 fi
 
-# Настройка Xray через x-ui DB (ПОСЛЕ запуска AGH, т.к. нужен итоговый ADG_DNS_PORT)
-configure_xray_via_xui_db
-
-# Перезапускаем x-ui чтобы применить новый конфиг из DB
-log "Перезапуск x-ui для применения конфигурации Xray..."
-systemctl restart x-ui
-# Ждём поднятия xray внутри x-ui (порт 443)
+# Пишем прямой конфиг Xray после того, как известен финальный DNS-порт AGH.
+log "Запись прямого конфига Xray..."
+write_xray_config
+xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
+log "Перезапуск xray для применения конфигурации..."
+systemctl restart xray
+# Ждём поднятия Xray на порту 443
 for _i in $(seq 1 15); do ss -tlnp | grep ':443 ' > /dev/null 2>&1 && break; sleep 1; done
 if ss -tlnp | grep ':443 ' > /dev/null 2>&1; then
     log "Xray Reality (порт 443) слушает — OK"
 else
-    warn "Xray НЕ слушает на порту 443! Проверьте: journalctl -u x-ui -n 50"
+    err "Xray НЕ слушает на порту 443! Проверьте: journalctl -u xray -n 50"
 fi
 
 # ==============================================================================
@@ -794,6 +800,9 @@ findtime = 10m
 bantime = 1h
 EOF
 systemctl restart fail2ban
+
+validate_stack "${AGH_SVC_NAME}"
+
 # 8. ОЧИСТКА И УДАЛЕНИЕ ИНСТРУМЕНТОВ СБОРКИ
 # ==============================================================================
 log "Удаление инструментов сборки (Hardening) и очистка кэша..."

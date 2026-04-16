@@ -1,4 +1,4 @@
 <!--
 Name: vps-vpn-triad setup script
-Description: Describes the Xray Reality, AmneziaWG, and AdGuardHome installer. Keep this file untracked.
+Description: Описывает Xray-only установщик для Reality, AmneziaWG и AdGuardHome с очисткой legacy panel и встроенной валидацией. Не коммитить.
 -->

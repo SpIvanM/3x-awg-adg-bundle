@@ -47,6 +47,9 @@ systemctl disable xray 2>/dev/null || true
 rm -rf /usr/local/bin/xray
 rm -rf /usr/local/etc/xray
 rm -rf /etc/systemd/system/xray.service /etc/systemd/system/xray@.service /var/log/xray
+systemctl stop x-ui 2>/dev/null || true
+systemctl disable x-ui 2>/dev/null || true
+rm -rf /usr/local/x-ui /etc/x-ui /etc/systemd/system/x-ui.service
 systemctl daemon-reload 2>/dev/null || true
 
 systemctl stop awg-quick@awg0 2>/dev/null || true
@@ -56,7 +59,10 @@ rm -rf /etc/amnezia/amneziawg /etc/systemd/system/awg-quick@.service
 /opt/AdGuardHome/AdGuardHome -s uninstall 2>/dev/null || true
 systemctl stop AdGuardHome 2>/dev/null || true
 systemctl disable AdGuardHome 2>/dev/null || true
+systemctl stop adguardhome 2>/dev/null || true
+systemctl disable adguardhome 2>/dev/null || true
 rm -rf /opt/AdGuardHome /etc/systemd/system/AdGuardHome.service /etc/systemd/system/AdGuardHome.service.d
+rm -rf /etc/systemd/system/adguardhome.service /etc/systemd/system/adguardhome.service.d
 
 rm -f /etc/fail2ban/jail.d/vpn-bundle.local
 systemctl restart fail2ban 2>/dev/null || true
