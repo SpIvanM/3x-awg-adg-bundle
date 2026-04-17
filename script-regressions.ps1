@@ -1,6 +1,6 @@
 <#
 Name: script regression checks
-Description: Validates that setup and uninstall scripts keep the Xray-only Reality setup, optional cascade failover, combined TProxy handling, AdGuard DNS config, AWG routing, safe piped execution, and managed swapfile cleanup.
+Description: Validates that setup and uninstall scripts keep the Xray-only Reality setup, optional cascade routing, combined TProxy handling, AdGuard DNS config, AWG routing, safe piped execution, and managed swapfile cleanup.
 Usage: powershell -File .\script-regressions.ps1
 Behavior: Reads setup.sh and uninstall.sh and fails if required guardrails are absent or legacy 3x-ui plumbing remains.
 Returns: Exit code 0 on pass, non-zero on regression.
@@ -52,7 +52,7 @@ function Assert-Contains {
 }
 
 Assert-Match -Text $setup -Pattern 'install-release\.sh' -Message 'setup.sh must use the official Xray installer.'
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="2\.1\.1"' -Message 'setup.sh must expose the current installer version and bump it with each scripted change.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="2\.1\.2"' -Message 'setup.sh must expose the current installer version and bump it with each scripted change.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version so operators can verify the deployed revision.'
 Assert-Match -Text $setup -Pattern 'XRAY_VERSION_PIN="25\.1\.30"' -Message 'setup.sh must pin the Xray version that currently avoids the transparent-listener regression.'
 Assert-Contains -Text $setup -Needle '@ install --version "$XRAY_VERSION_PIN"' -Message 'setup.sh must install Xray through the official installer with the pinned stable version.'
@@ -87,9 +87,6 @@ Assert-NotMatch -Text $setup -Pattern '"sockopt": \{\r?\n\s+"mark": 1,\r?\n\s+"t
 Assert-Match -Text $setup -Pattern '"tag": "direct-out"' -Message 'setup.sh must generate the direct-out outbound for local egress.'
 Assert-Match -Text $setup -Pattern '"tag": "block-out"' -Message 'setup.sh must keep the block-out outbound.'
 Assert-Match -Text $setup -Pattern '"tag": "exit-us"' -Message 'setup.sh must generate the cascade exit-us outbound.'
-Assert-Match -Text $setup -Pattern '"tag": "bridge-exit"' -Message 'setup.sh must define the balancer used for cascade failover.'
-Assert-Match -Text $setup -Pattern '"fallbackTag": "direct-out"' -Message 'setup.sh must fall back to direct-out when the upstream exit is unhealthy.'
-Assert-Match -Text $setup -Pattern '"type": "leastPing"' -Message 'setup.sh must use leastPing balancer selection for cascade mode.'
 Assert-Match -Text $setup -Pattern '"domainStrategy": "IPIfNonMatch"' -Message 'setup.sh must use IPIfNonMatch routing for RU split rules.'
 Assert-Match -Text $setup -Pattern '"ruleTag": "ru-domains"' -Message 'setup.sh must define RU domain bypass rules.'
 Assert-Contains -Text $setup -Needle '"regexp:\\\\.ru$"' -Message 'setup.sh must bypass .ru domains locally.'
@@ -98,13 +95,15 @@ Assert-Match -Text $setup -Pattern 'geoip:ru' -Message 'setup.sh must bypass RU 
 Assert-Match -Text $setup -Pattern '"ruleTag": "entry-server-self"' -Message 'setup.sh must bypass traffic aimed at the entry VPS itself.'
 Assert-Match -Text $setup -Pattern '"ruleTag": "reality-server-egress"' -Message 'setup.sh must force Reality ingress egress through direct-out.'
 Assert-Match -Text $setup -Pattern '"ruleTag": "vpn-default"' -Message 'setup.sh must define the default VPN routing rule.'
-Assert-Match -Text $setup -Pattern '"balancerTag": "bridge-exit"|vpn_default_rule\["balancerTag"\] = "bridge-exit"' -Message 'setup.sh must send default AWG traffic through the bridge-exit balancer in cascade mode.'
-Assert-Match -Text $setup -Pattern 'config\["observatory"\] = \{|"observatory"' -Message 'setup.sh must configure Xray observability for failover.'
-Assert-Match -Text $setup -Pattern '"probeUrl": "https://connectivitycheck\.gstatic\.com/generate_204"' -Message 'setup.sh must probe a stable connectivity endpoint for cascade health.'
-Assert-Match -Text $setup -Pattern '"probeInterval": "30s"' -Message 'setup.sh must probe the cascade exit on a 30s interval.'
+Assert-Match -Text $setup -Pattern 'vpn_default_rule\["outboundTag"\] = "exit-us"' -Message 'setup.sh must send default AWG traffic directly to the cascade exit in cascade mode.'
+Assert-NotMatch -Text $setup -Pattern '"tag": "bridge-exit"|''fallbackTag''|"type": "leastPing"|config\["observatory"\] = \{' -Message 'setup.sh must not rely on balancer startup health checks for cascade routing.'
 Assert-Match -Text $setup -Pattern 'vless://' -Message 'setup.sh must still print a VLESS Reality link.'
 Assert-Match -Text $setup -Pattern 'flow=xtls-rprx-vision' -Message 'setup.sh must export a VLESS Reality link with the Vision flow.'
-Assert-Match -Text $setup -Pattern 'upstream_dns:\r?\n\s+- 1\.1\.1\.1\r?\n\s+- 8\.8\.8\.8' -Message 'setup.sh must use plain IP upstream DNS servers that current AdGuardHome accepts without bootstrap rewrites.'
+Assert-Match -Text $setup -Pattern 'ADG_HTTP_PROXY_PORT' -Message 'setup.sh must allocate a dedicated local HTTP proxy port for AdGuardHome.'
+Assert-Match -Text $setup -Pattern 'ADG_HTTP_PROXY_PORT=\$\(read_cred_value "ADG_HTTP_PROXY_PORT" "\$CREDS_FILE"\)' -Message 'setup.sh must restore the AdGuardHome proxy port on re-runs.'
+Assert-Match -Text $setup -Pattern '"tag": "adg-http-proxy-in"' -Message 'setup.sh must create a local HTTP proxy inbound for AdGuardHome.'
+Assert-Match -Text $setup -Pattern 'http_proxy: "http://127\.0\.0\.1:\$ADG_HTTP_PROXY_PORT/?"' -Message 'setup.sh must point AdGuardHome HTTP client traffic at the local Xray proxy.'
+Assert-Match -Text $setup -Pattern 'upstream_dns:\r?\n\s+- https://cloudflare-dns\.com/dns-query\r?\n\s+- https://dns\.google/dns-query' -Message 'setup.sh must switch AdGuardHome to DoH upstreams so DNS can be proxied.'
 Assert-Match -Text $setup -Pattern 'systemctl stop AdGuardHome' -Message 'setup.sh must stop AdGuardHome before rewriting its config.'
 Assert-Match -Text $setup -Pattern '\[sshd\]' -Message 'setup.sh must keep a fail2ban jail for SSH after removing the panel.'
 Assert-Match -Text $setup -Pattern 'linux-headers-\$\(uname -r\)' -Message 'setup.sh must request exact kernel headers for deterministic AmneziaWG builds.'

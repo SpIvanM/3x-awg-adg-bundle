@@ -1,8 +1,8 @@
 #!/bin/bash
 # Name: vps-vpn-triad (Xray Reality + AWG + AdGuard)
-# Description: Configures OS networking, pinned Xray Reality 25.1.30, optional Reality cascade failover, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
+# Description: Configures OS networking, pinned Xray Reality 25.1.30, optional Reality cascade routing, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate] [--cascade-vless 'vless://...'] [--cascade-mode auto]
-# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, and can route non-RU AWG traffic through a Reality upstream cascade.
+# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, can route non-RU AWG traffic through an upstream Reality exit, and proxies AdGuardHome DNS upstreams through local Xray.
 # Returns: Complete VPN and DNS server proxy routing.
 # Fails: If run without root privileges.
 # ==============================================================================
@@ -14,7 +14,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.1.1"
+SCRIPT_VERSION="2.1.2"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -318,6 +318,7 @@ write_xray_config() {
     XRAY_SHORT_ID="$XRAY_SHORT_ID" \
     T_PORT="$T_PORT" \
     ADG_DNS_PORT="$ADG_DNS_PORT" \
+    ADG_HTTP_PROXY_PORT="$ADG_HTTP_PROXY_PORT" \
     CASCADE_ENABLED="$CASCADE_ENABLED" \
     CASCADE_ADDRESS="$CASCADE_ADDRESS" \
     CASCADE_PORT="$CASCADE_PORT" \
@@ -358,6 +359,13 @@ vpn_default_rule = {
     "type": "field",
     "ruleTag": "vpn-default",
     "inboundTag": ["tproxy-in"],
+    "outboundTag": "direct-out",
+}
+
+adg_http_proxy_rule = {
+    "type": "field",
+    "ruleTag": "adg-http-proxy",
+    "inboundTag": ["adg-http-proxy-in"],
     "outboundTag": "direct-out",
 }
 
@@ -435,6 +443,15 @@ config = {
                 },
             },
         },
+        {
+            "tag": "adg-http-proxy-in",
+            "listen": "127.0.0.1",
+            "port": int(os.environ["ADG_HTTP_PROXY_PORT"]),
+            "protocol": "http",
+            "settings": {
+                "allowTransparent": False,
+            },
+        },
     ],
     "outbounds": [
         direct_outbound,
@@ -482,6 +499,7 @@ config = {
                 "inboundTag": ["reality-in"],
                 "outboundTag": "direct-out",
             },
+            adg_http_proxy_rule,
             {
                 "type": "field",
                 "ruleTag": "block-bittorrent",
@@ -528,24 +546,8 @@ if cascade_enabled:
         },
     }
     config["outbounds"].append(exit_us_outbound)
-    config["routing"]["balancers"] = [
-        {
-            "tag": "bridge-exit",
-            "selector": ["exit-"],
-            "fallbackTag": "direct-out",
-            "strategy": {
-                "type": "leastPing",
-            },
-        }
-    ]
-    vpn_default_rule.pop("outboundTag", None)
-    vpn_default_rule["balancerTag"] = "bridge-exit"
-    config["observatory"] = {
-        "subjectSelector": ["exit-"],
-        "probeUrl": "https://connectivitycheck.gstatic.com/generate_204",
-        "probeInterval": "30s",
-        "enableConcurrency": False,
-    }
+    adg_http_proxy_rule["outboundTag"] = "exit-us"
+    vpn_default_rule["outboundTag"] = "exit-us"
 
 json.dump(config, sys.stdout, indent=2)
 sys.stdout.write("\n")
@@ -764,6 +766,7 @@ if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
     XRAY_PUBLIC_KEY=$(read_cred_value "XRAY_PUBLIC_KEY" "$CREDS_FILE")
     XRAY_SHORT_ID=$(read_cred_value "XRAY_SHORT_ID" "$CREDS_FILE")
     ADG_DNS_PORT=$(read_cred_value "ADG_DNS_PORT" "$CREDS_FILE")
+    ADG_HTTP_PROXY_PORT=$(read_cred_value "ADG_HTTP_PROXY_PORT" "$CREDS_FILE")
     CASCADE_ENABLED=$(read_cred_value "CASCADE_ENABLED" "$CREDS_FILE")
     CASCADE_MODE=$(read_cred_value "CASCADE_MODE" "$CREDS_FILE")
     CASCADE_VLESS=$(read_cred_value "CASCADE_VLESS" "$CREDS_FILE")
@@ -785,6 +788,7 @@ fi
 
 # Prepare the AdGuard DNS listener port early so Xray can point to the final value.
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
+[ -z "$ADG_HTTP_PROXY_PORT" ] && ADG_HTTP_PROXY_PORT=$(shuf -i 10000-65000 -n 1)
 
 if systemctl is-active --quiet xray 2>/dev/null && [ -x /usr/local/bin/xray ]; then
     warn "Xray уже установлен и работает. Перегенерируем конфиг."
@@ -821,7 +825,7 @@ remove_legacy_xui
 configure_cascade_mode
 
 if [ "$CASCADE_ENABLED" -eq 1 ]; then
-    log "Cascade mode включён: non-RU AWG трафик пойдёт через upstream Reality, fallback = direct-out."
+    log "Cascade mode включён: non-RU AWG трафик пойдёт через upstream Reality exit-us."
 else
     log "Cascade mode выключен: система работает в direct-exit режиме."
 fi
@@ -1025,7 +1029,7 @@ users:
     password: $ADG_HASH
 auth_attempts: 5
 block_auth_min: 15
-http_proxy: ""
+http_proxy: "http://127.0.0.1:$ADG_HTTP_PROXY_PORT/"
 language: ru
 theme: auto
 dns:
@@ -1033,8 +1037,8 @@ dns:
     - 0.0.0.0
   port: $ADG_DNS_PORT
   upstream_dns:
-    - 1.1.1.1
-    - 8.8.8.8
+    - https://cloudflare-dns.com/dns-query
+    - https://dns.google/dns-query
   cache_size: 4194304
 filtering:
   safe_search:
@@ -1218,6 +1222,7 @@ ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
 ADG_USER=${ADG_USER}
 ADG_PASS=${ADG_PASS}
 ADG_DNS_PORT=${ADG_DNS_PORT}
+ADG_HTTP_PROXY_PORT=${ADG_HTTP_PROXY_PORT}
 AWG_PORT=${AWG_PORT}
 AWG_SERVER_PRIV=${SERVER_PRIV}
 AWG_CLIENT_PRIV=${CLIENT_PRIV}
