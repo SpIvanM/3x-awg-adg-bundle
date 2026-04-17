@@ -18,12 +18,12 @@
 # Комплексный скрипт настройки Debian 11/Ubuntu: OS Optimization + Xray Reality + AmneziaWG + AdGuardHome
 # ==============================================================================
 
-set -e
+set -Ee
 export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.2.1"
+SCRIPT_VERSION="2.2.2"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -44,6 +44,12 @@ CASCADE_FP=""
 CASCADE_SPX=""
 CASCADE_ADDRESS_IP=""
 FINAL_MODE="direct"
+CURRENT_STEP="bootstrap"
+
+mark_step() {
+    CURRENT_STEP="$1"
+    log "Шаг: ${CURRENT_STEP}"
+}
 
 # Обработка аргументов
 ROTATE_CREDS=0
@@ -85,10 +91,19 @@ RESET="\e[0m"
 log() { echo -e "${GREEN}[INFO] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
 err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
+on_script_error() {
+    local exit_code="$1"
+    local signal="$2"
+    local failing_command="$3"
+
+    warn "Скрипт прерван (${signal}) на шаге: ${CURRENT_STEP:-unknown}. Команда: ${failing_command:-unknown}. Код: ${exit_code}. Лог: $LOG_FILE"
+}
 
 log "Версия скрипта: ${SCRIPT_VERSION}"
 
-trap 'warn "Скрипт прерван! Проверьте состояние вручную. Лог: $LOG_FILE"' ERR INT TERM
+trap 'on_script_error "$?" "ERR" "$BASH_COMMAND"' ERR
+trap 'on_script_error 130 "INT" "$BASH_COMMAND"' INT
+trap 'on_script_error 143 "TERM" "$BASH_COMMAND"' TERM
 
 if [ "$EUID" -ne 0 ]; then
   err "Запустите скрипт от имени root (sudo -i)"

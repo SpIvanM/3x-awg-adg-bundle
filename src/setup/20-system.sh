@@ -1,9 +1,11 @@
 # ==============================================================================
 # 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
 # ==============================================================================
+mark_step "System: swapfile and OS packages"
 ensure_swapfile
 
 if [ "$SKIP_APT" -eq 0 ]; then
+    mark_step "System: apt update and base packages"
     log "Очистка устаревших репозиториев (удаление bullseye-backports)..."
     sed -i '/bullseye-backports/d' /etc/apt/sources.list
     rm -f /etc/apt/sources.list.d/*backports*.list 2>/dev/null || true
@@ -26,6 +28,7 @@ else
 fi
 
 if [ "$SKIP_APT" -eq 0 ]; then
+    mark_step "System: editor defaults"
     log "Настройка редактора mcedit по умолчанию..."
     update-alternatives --set editor /usr/bin/mcedit || true
     export EDITOR=mcedit
@@ -34,6 +37,7 @@ if [ "$SKIP_APT" -eq 0 ]; then
     fi
 fi
 
+mark_step "System: sysctl hardening"
 log "Оптимизация sysctl (сеть, BBR, лимиты)..."
 # Удаляем устаревший файл (может содержать ключи из прошлых версий скрипта)
 rm -f /etc/sysctl.d/99-custom-net.conf
@@ -60,6 +64,7 @@ sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || t
 # ==============================================================================
 # 2. УСТАНОВКА XRAY
 # ==============================================================================
+mark_step "System: Xray bootstrap"
 log "Проверка и установка Xray-core..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
@@ -89,6 +94,8 @@ if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
     FINAL_MODE=$(read_cred_value "FINAL_MODE" "$CREDS_FILE")
 fi
 
+# Generate or restore Reality keys only after Xray is present and the binary is resolved.
+mark_step "System: load Xray credentials"
 # Если после загрузки переменные пустые, генерируем заново
 [ -z "$XRAY_UUID" ] && XRAY_UUID=$(cat /proc/sys/kernel/random/uuid)
 [ -z "$XRAY_SHORT_ID" ] && XRAY_SHORT_ID=$(openssl rand -hex 8)
@@ -109,6 +116,7 @@ fi
 XRAY_BIN="$(resolve_xray_bin || true)"
 [ -n "$XRAY_BIN" ] || err "Бинарный файл xray не найден после установки."
 
+mark_step "System: derive Reality keys"
 if [ -n "$XRAY_PRIVATE_KEY" ] && [ -z "$XRAY_PUBLIC_KEY" ]; then
     log "В credentials Xray найден private key Reality, восстанавливаем public key..."
     DERIVED_OUTPUT="$("$XRAY_BIN" x25519 -i "$XRAY_PRIVATE_KEY" 2>&1 || true)"

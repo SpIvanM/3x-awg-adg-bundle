@@ -1,6 +1,7 @@
 # ==============================================================================
 # 7. НАСТРОЙКА SSH И ФАЕРВОЛА
 # ==============================================================================
+mark_step "Firewall: UFW and SSH"
 log "Настройка UFW..."
 if ss -tlnp | grep -q ':2244'; then
     warn "SSH уже на порту 2244, настраиваем правила для него."
@@ -33,6 +34,7 @@ if ! ss -tlnp | grep -q ':2244'; then
 fi
 
 # Настройка Fail2Ban для SSH
+mark_step "Firewall: Fail2Ban"
 log "Настройка Fail2Ban (SSH)..."
 cat <<EOF > /etc/fail2ban/jail.d/vpn-bundle.local
 [sshd]
@@ -46,4 +48,5 @@ bantime = 1h
 EOF
 systemctl restart fail2ban
 
+mark_step "Firewall: validate stack"
 validate_stack "${AGH_SVC_NAME}"

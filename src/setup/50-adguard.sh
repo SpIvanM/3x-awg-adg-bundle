@@ -2,6 +2,7 @@
 # 6. УСТАНОВКА И НАСТРОЙКА ADGUARD HOME
 # ==============================================================================
 log "Установка AdGuardHome..."
+mark_step "AdGuardHome: load credentials and install binary"
 # DNS на случайном порту $ADG_DNS_PORT — systemd-resolved отключать не нужно
 
 # Загружаем или генерируем новые credentials AdGuardHome
@@ -30,6 +31,7 @@ else
 fi
 
 # Всегда перезаписываем конфиг (новые порт, логин, пароль)
+mark_step "AdGuardHome: write YAML config"
 log "Применение конфигурации AdGuardHome..."
 
 # Останавливаем активные инстансы и удаляем legacy lower-case unit.
@@ -80,6 +82,7 @@ EOF
 
 # Регистрируем systemd-юнит AdGuardHome. Используем одно canonical имя сервиса.
 AGH_SVC_NAME="AdGuardHome"
+mark_step "AdGuardHome: register systemd unit"
 if ! systemctl list-unit-files 2>/dev/null | grep -qi 'AdGuardHome\.service'; then
     log "Регистрация AdGuardHome в systemd..."
     /opt/AdGuardHome/AdGuardHome -s install 2>/dev/null || true
@@ -106,6 +109,7 @@ UNIT
 fi
 
 # Добавляем override: запускать ПОСЛЕ awg0
+mark_step "AdGuardHome: configure after-awg override"
 mkdir -p "/etc/systemd/system/${AGH_SVC_NAME}.service.d"
 cat <<OVERRIDE > "/etc/systemd/system/${AGH_SVC_NAME}.service.d/after-awg.conf"
 [Unit]
@@ -117,6 +121,7 @@ RestartSec=5
 OVERRIDE
 
 systemctl daemon-reload
+mark_step "AdGuardHome: enable and restart service"
 systemctl enable "${AGH_SVC_NAME}" 2>/dev/null || true
 
 # Ждём интерфейс awg0 (до 15с), затем стартуем
@@ -132,6 +137,7 @@ else
 fi
 
 # Пишем прямой конфиг Xray после того, как известен финальный DNS-порт AGH.
+mark_step "Xray: write direct config after AdGuardHome"
 log "Запись прямого конфига Xray..."
 write_xray_config
 xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."

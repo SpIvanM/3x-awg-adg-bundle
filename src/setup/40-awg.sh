@@ -2,17 +2,21 @@
 # 5. УСТАНОВКА AMNEZIAWG
 # ==============================================================================
 log "Проверка AmneziaWG..."
+mark_step "AmneziaWG: check installation state"
 if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
     warn "AmneziaWG уже настроен, пропускаем переустановку."
 else
+    mark_step "AmneziaWG: install build dependencies"
     ensure_awg_build_dependencies
     if grep -qi "ubuntu" /etc/os-release; then
+        mark_step "AmneziaWG: install Ubuntu package"
         log "Используем PPA для Ubuntu..."
         apt install -y software-properties-common python3-launchpadlib gnupg2
         add-apt-repository -y ppa:amnezia/ppa
         apt update
         apt install -y amneziawg
     else
+        mark_step "AmneziaWG: build Debian module"
         log "Сборка AmneziaWG из исходников (Debian)..."
         (
             cd /usr/src
@@ -31,15 +35,19 @@ else
     fi
 fi
 log "Генерация ключей и конфигурации AmneziaWG..."
+mark_step "AmneziaWG: prepare config directory"
 mkdir -p /etc/amnezia/amneziawg
 chmod 700 /etc/amnezia/amneziawg
 
 AWG_PORT=51820
+mark_step "AmneziaWG: resolve AWG key binary"
 AWG_KEY_BIN="$(resolve_awg_key_bin || true)"
 [ -n "$AWG_KEY_BIN" ] || err "Не найден awg/wg после установки AmneziaWG."
+mark_step "AmneziaWG: load existing credentials"
 load_existing_awg_credentials
 
 # Параметры обфускации (Рандомизация для защиты от сигнатурного анализа ТСПУ 2026)
+mark_step "AmneziaWG: generate obfuscation parameters"
 [ -z "$JC" ] && JC=$(shuf -i 3-12 -n 1)
 [ -z "$JMIN" ] && JMIN=$(shuf -i 40-70 -n 1)
 [ -z "$JMAX" ] && JMAX=$(shuf -i 700-1200 -n 1)
@@ -52,12 +60,17 @@ load_existing_awg_credentials
 # Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
+mark_step "AmneziaWG: generate server private key"
 [ -z "$SERVER_PRIV" ] && SERVER_PRIV=$("$AWG_KEY_BIN" genkey)
+mark_step "AmneziaWG: generate client private key"
 [ -z "$CLIENT_PRIV" ] && CLIENT_PRIV=$("$AWG_KEY_BIN" genkey)
+mark_step "AmneziaWG: generate client preshared key"
 [ -z "$CLIENT_PSK" ] && CLIENT_PSK=$("$AWG_KEY_BIN" genpsk)
+mark_step "AmneziaWG: derive public keys"
 [ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$AWG_KEY_BIN" pubkey)
 [ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$AWG_KEY_BIN" pubkey)
 
+mark_step "AmneziaWG: write awg0.conf"
 cat <<EOF > /etc/amnezia/amneziawg/awg0.conf
 [Interface]
 Address = 10.8.0.1/24
@@ -89,11 +102,15 @@ PresharedKey = $CLIENT_PSK
 AllowedIPs = 10.8.0.2/32
 EOF
 
+mark_step "AmneziaWG: cleanup legacy DNS redirects"
 cleanup_legacy_awg_dns_redirects
+mark_step "AmneziaWG: enable awg-quick@awg0"
 systemctl enable awg-quick@awg0
+mark_step "AmneziaWG: restart awg-quick@awg0"
 systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0. Проверьте сборку модуля AmneziaWG для $(uname -r)."
 
 # Конфигурация клиента
+mark_step "AmneziaWG: write amnezia_client.conf"
 cat <<EOF > /root/amnezia_client.conf
 [Interface]
 PrivateKey = $CLIENT_PRIV

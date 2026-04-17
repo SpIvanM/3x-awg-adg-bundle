@@ -18,12 +18,12 @@
 # Комплексный скрипт настройки Debian 11/Ubuntu: OS Optimization + Xray Reality + AmneziaWG + AdGuardHome
 # ==============================================================================
 
-set -e
+set -Ee
 export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.2.1"
+SCRIPT_VERSION="2.2.2"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -44,6 +44,12 @@ CASCADE_FP=""
 CASCADE_SPX=""
 CASCADE_ADDRESS_IP=""
 FINAL_MODE="direct"
+CURRENT_STEP="bootstrap"
+
+mark_step() {
+    CURRENT_STEP="$1"
+    log "Шаг: ${CURRENT_STEP}"
+}
 
 # Обработка аргументов
 ROTATE_CREDS=0
@@ -85,10 +91,19 @@ RESET="\e[0m"
 log() { echo -e "${GREEN}[INFO] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
 err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
+on_script_error() {
+    local exit_code="$1"
+    local signal="$2"
+    local failing_command="$3"
+
+    warn "Скрипт прерван (${signal}) на шаге: ${CURRENT_STEP:-unknown}. Команда: ${failing_command:-unknown}. Код: ${exit_code}. Лог: $LOG_FILE"
+}
 
 log "Версия скрипта: ${SCRIPT_VERSION}"
 
-trap 'warn "Скрипт прерван! Проверьте состояние вручную. Лог: $LOG_FILE"' ERR INT TERM
+trap 'on_script_error "$?" "ERR" "$BASH_COMMAND"' ERR
+trap 'on_script_error 130 "INT" "$BASH_COMMAND"' INT
+trap 'on_script_error 143 "TERM" "$BASH_COMMAND"' TERM
 
 if [ "$EUID" -ne 0 ]; then
   err "Запустите скрипт от имени root (sudo -i)"
@@ -718,9 +733,11 @@ ensure_swapfile() {
 # ==============================================================================
 # 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
 # ==============================================================================
+mark_step "System: swapfile and OS packages"
 ensure_swapfile
 
 if [ "$SKIP_APT" -eq 0 ]; then
+    mark_step "System: apt update and base packages"
     log "Очистка устаревших репозиториев (удаление bullseye-backports)..."
     sed -i '/bullseye-backports/d' /etc/apt/sources.list
     rm -f /etc/apt/sources.list.d/*backports*.list 2>/dev/null || true
@@ -743,6 +760,7 @@ else
 fi
 
 if [ "$SKIP_APT" -eq 0 ]; then
+    mark_step "System: editor defaults"
     log "Настройка редактора mcedit по умолчанию..."
     update-alternatives --set editor /usr/bin/mcedit || true
     export EDITOR=mcedit
@@ -751,6 +769,7 @@ if [ "$SKIP_APT" -eq 0 ]; then
     fi
 fi
 
+mark_step "System: sysctl hardening"
 log "Оптимизация sysctl (сеть, BBR, лимиты)..."
 # Удаляем устаревший файл (может содержать ключи из прошлых версий скрипта)
 rm -f /etc/sysctl.d/99-custom-net.conf
@@ -777,6 +796,7 @@ sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || t
 # ==============================================================================
 # 2. УСТАНОВКА XRAY
 # ==============================================================================
+mark_step "System: Xray bootstrap"
 log "Проверка и установка Xray-core..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
@@ -806,6 +826,8 @@ if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
     FINAL_MODE=$(read_cred_value "FINAL_MODE" "$CREDS_FILE")
 fi
 
+# Generate or restore Reality keys only after Xray is present and the binary is resolved.
+mark_step "System: load Xray credentials"
 # Если после загрузки переменные пустые, генерируем заново
 [ -z "$XRAY_UUID" ] && XRAY_UUID=$(cat /proc/sys/kernel/random/uuid)
 [ -z "$XRAY_SHORT_ID" ] && XRAY_SHORT_ID=$(openssl rand -hex 8)
@@ -826,6 +848,7 @@ fi
 XRAY_BIN="$(resolve_xray_bin || true)"
 [ -n "$XRAY_BIN" ] || err "Бинарный файл xray не найден после установки."
 
+mark_step "System: derive Reality keys"
 if [ -n "$XRAY_PRIVATE_KEY" ] && [ -z "$XRAY_PUBLIC_KEY" ]; then
     log "В credentials Xray найден private key Reality, восстанавливаем public key..."
     DERIVED_OUTPUT="$("$XRAY_BIN" x25519 -i "$XRAY_PRIVATE_KEY" 2>&1 || true)"
@@ -844,6 +867,7 @@ fi
 # ==============================================================================
 # 3. ОЧИСТКА LEGACY XRAY CONTROL PLANE
 # ==============================================================================
+mark_step "Xray: cleanup legacy x-ui and build VLESS link"
 log "Удаление legacy x-ui, если он остался от предыдущих версий..."
 remove_legacy_xui
 configure_cascade_mode
@@ -860,17 +884,21 @@ VLESS_LINK="vless://$XRAY_UUID@$SERVER_IP:$XRAY_PORT?type=tcp&security=reality&e
 # 5. УСТАНОВКА AMNEZIAWG
 # ==============================================================================
 log "Проверка AmneziaWG..."
+mark_step "AmneziaWG: check installation state"
 if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
     warn "AmneziaWG уже настроен, пропускаем переустановку."
 else
+    mark_step "AmneziaWG: install build dependencies"
     ensure_awg_build_dependencies
     if grep -qi "ubuntu" /etc/os-release; then
+        mark_step "AmneziaWG: install Ubuntu package"
         log "Используем PPA для Ubuntu..."
         apt install -y software-properties-common python3-launchpadlib gnupg2
         add-apt-repository -y ppa:amnezia/ppa
         apt update
         apt install -y amneziawg
     else
+        mark_step "AmneziaWG: build Debian module"
         log "Сборка AmneziaWG из исходников (Debian)..."
         (
             cd /usr/src
@@ -889,15 +917,19 @@ else
     fi
 fi
 log "Генерация ключей и конфигурации AmneziaWG..."
+mark_step "AmneziaWG: prepare config directory"
 mkdir -p /etc/amnezia/amneziawg
 chmod 700 /etc/amnezia/amneziawg
 
 AWG_PORT=51820
+mark_step "AmneziaWG: resolve AWG key binary"
 AWG_KEY_BIN="$(resolve_awg_key_bin || true)"
 [ -n "$AWG_KEY_BIN" ] || err "Не найден awg/wg после установки AmneziaWG."
+mark_step "AmneziaWG: load existing credentials"
 load_existing_awg_credentials
 
 # Параметры обфускации (Рандомизация для защиты от сигнатурного анализа ТСПУ 2026)
+mark_step "AmneziaWG: generate obfuscation parameters"
 [ -z "$JC" ] && JC=$(shuf -i 3-12 -n 1)
 [ -z "$JMIN" ] && JMIN=$(shuf -i 40-70 -n 1)
 [ -z "$JMAX" ] && JMAX=$(shuf -i 700-1200 -n 1)
@@ -910,12 +942,17 @@ load_existing_awg_credentials
 # Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
+mark_step "AmneziaWG: generate server private key"
 [ -z "$SERVER_PRIV" ] && SERVER_PRIV=$("$AWG_KEY_BIN" genkey)
+mark_step "AmneziaWG: generate client private key"
 [ -z "$CLIENT_PRIV" ] && CLIENT_PRIV=$("$AWG_KEY_BIN" genkey)
+mark_step "AmneziaWG: generate client preshared key"
 [ -z "$CLIENT_PSK" ] && CLIENT_PSK=$("$AWG_KEY_BIN" genpsk)
+mark_step "AmneziaWG: derive public keys"
 [ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$AWG_KEY_BIN" pubkey)
 [ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$AWG_KEY_BIN" pubkey)
 
+mark_step "AmneziaWG: write awg0.conf"
 cat <<EOF > /etc/amnezia/amneziawg/awg0.conf
 [Interface]
 Address = 10.8.0.1/24
@@ -947,11 +984,15 @@ PresharedKey = $CLIENT_PSK
 AllowedIPs = 10.8.0.2/32
 EOF
 
+mark_step "AmneziaWG: cleanup legacy DNS redirects"
 cleanup_legacy_awg_dns_redirects
+mark_step "AmneziaWG: enable awg-quick@awg0"
 systemctl enable awg-quick@awg0
+mark_step "AmneziaWG: restart awg-quick@awg0"
 systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0. Проверьте сборку модуля AmneziaWG для $(uname -r)."
 
 # Конфигурация клиента
+mark_step "AmneziaWG: write amnezia_client.conf"
 cat <<EOF > /root/amnezia_client.conf
 [Interface]
 PrivateKey = $CLIENT_PRIV
@@ -980,6 +1021,7 @@ chmod 600 /root/amnezia_client.conf
 # 6. УСТАНОВКА И НАСТРОЙКА ADGUARD HOME
 # ==============================================================================
 log "Установка AdGuardHome..."
+mark_step "AdGuardHome: load credentials and install binary"
 # DNS на случайном порту $ADG_DNS_PORT — systemd-resolved отключать не нужно
 
 # Загружаем или генерируем новые credentials AdGuardHome
@@ -1008,6 +1050,7 @@ else
 fi
 
 # Всегда перезаписываем конфиг (новые порт, логин, пароль)
+mark_step "AdGuardHome: write YAML config"
 log "Применение конфигурации AdGuardHome..."
 
 # Останавливаем активные инстансы и удаляем legacy lower-case unit.
@@ -1058,6 +1101,7 @@ EOF
 
 # Регистрируем systemd-юнит AdGuardHome. Используем одно canonical имя сервиса.
 AGH_SVC_NAME="AdGuardHome"
+mark_step "AdGuardHome: register systemd unit"
 if ! systemctl list-unit-files 2>/dev/null | grep -qi 'AdGuardHome\.service'; then
     log "Регистрация AdGuardHome в systemd..."
     /opt/AdGuardHome/AdGuardHome -s install 2>/dev/null || true
@@ -1084,6 +1128,7 @@ UNIT
 fi
 
 # Добавляем override: запускать ПОСЛЕ awg0
+mark_step "AdGuardHome: configure after-awg override"
 mkdir -p "/etc/systemd/system/${AGH_SVC_NAME}.service.d"
 cat <<OVERRIDE > "/etc/systemd/system/${AGH_SVC_NAME}.service.d/after-awg.conf"
 [Unit]
@@ -1095,6 +1140,7 @@ RestartSec=5
 OVERRIDE
 
 systemctl daemon-reload
+mark_step "AdGuardHome: enable and restart service"
 systemctl enable "${AGH_SVC_NAME}" 2>/dev/null || true
 
 # Ждём интерфейс awg0 (до 15с), затем стартуем
@@ -1110,6 +1156,7 @@ else
 fi
 
 # Пишем прямой конфиг Xray после того, как известен финальный DNS-порт AGH.
+mark_step "Xray: write direct config after AdGuardHome"
 log "Запись прямого конфига Xray..."
 write_xray_config
 xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
@@ -1126,6 +1173,7 @@ fi
 # ==============================================================================
 # 7. НАСТРОЙКА SSH И ФАЕРВОЛА
 # ==============================================================================
+mark_step "Firewall: UFW and SSH"
 log "Настройка UFW..."
 if ss -tlnp | grep -q ':2244'; then
     warn "SSH уже на порту 2244, настраиваем правила для него."
@@ -1158,6 +1206,7 @@ if ! ss -tlnp | grep -q ':2244'; then
 fi
 
 # Настройка Fail2Ban для SSH
+mark_step "Firewall: Fail2Ban"
 log "Настройка Fail2Ban (SSH)..."
 cat <<EOF > /etc/fail2ban/jail.d/vpn-bundle.local
 [sshd]
@@ -1171,11 +1220,13 @@ bantime = 1h
 EOF
 systemctl restart fail2ban
 
+mark_step "Firewall: validate stack"
 validate_stack "${AGH_SVC_NAME}"
 
 # ==============================================================================
 # 8. ОЧИСТКА И УДАЛЕНИЕ ИНСТРУМЕНТОВ СБОРКИ
 # ==============================================================================
+mark_step "Finalize: cleanup build tools"
 log "Удаление инструментов сборки (Hardening) и очистка кэша..."
 if [ "$SKIP_APT" -eq 0 ]; then
     # Удаляем пакеты сборки (dkms оставляем для пересборки модуля при обновлении ядра)
@@ -1191,6 +1242,7 @@ fi
 # ==============================================================================
 # 9. СОХРАНЕНИЕ CREDENTIALS И ФИНАЛЬНЫЙ ВЫВОД
 # ==============================================================================
+mark_step "Finalize: persist credentials and print output"
 cat <<CREDS > "$CREDS_FILE"
 # 3x-awg-adg-bundle credentials (v${SCRIPT_VERSION})
 # Generated: $(date -Iseconds)

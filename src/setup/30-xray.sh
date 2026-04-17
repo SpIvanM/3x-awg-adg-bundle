@@ -1,6 +1,7 @@
 # ==============================================================================
 # 3. ОЧИСТКА LEGACY XRAY CONTROL PLANE
 # ==============================================================================
+mark_step "Xray: cleanup legacy x-ui and build VLESS link"
 log "Удаление legacy x-ui, если он остался от предыдущих версий..."
 remove_legacy_xui
 configure_cascade_mode
