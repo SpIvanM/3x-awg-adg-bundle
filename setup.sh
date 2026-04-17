@@ -90,7 +90,7 @@ RESET="\e[0m"
 
 log() { echo -e "${GREEN}[INFO] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
-err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
+err() { echo -e "${RED}[ERROR] [${CURRENT_STEP:-unknown}] $1${RESET}"; exit 1; }
 on_script_error() {
     local exit_code="$1"
     local signal="$2"

@@ -89,7 +89,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 - Повторный запуск без `--rotate` должен переиспользовать текущие credentials `Xray`, `AdGuardHome` и `AmneziaWG`, а не пересоздавать клиентский AWG-профиль.
 - При повторном запуске сохранённые credentials и восстановленные значения из существующих конфигов нормализуются от `CRLF`, чтобы Windows-переносы строк не попадали внутрь `Xray` JSON и `AWG`/`AGH` runtime-конфигов.
 - Если повторный запуск делается без `--cascade-vless`, скрипт отключает optional DNS cascade и переписывает `CASCADE_*` поля в credentials.
-- При сбое `setup.sh` теперь пишет не только общий warning, но и текущий шаг плюс упавшую команду, чтобы AWG-ошибки можно было локализовать без ручного перебора логов.
+- При сбое `setup.sh` теперь пишет текущий шаг всегда; для необработанных ошибок дополнительно показывается упавшая команда, чтобы AWG-ошибки можно было локализовать без ручного перебора логов.
 
 ### Удаление
 
@@ -178,7 +178,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 
 - A re-run without `--rotate` is expected to reuse the current `Xray`, `AdGuardHome`, and `AmneziaWG` credentials instead of replacing the active AWG client profile.
 - A re-run without `--cascade-vless` disables the optional DNS cascade and rewrites the persisted `CASCADE_*` values.
-- If `setup.sh` fails, it now prints the active step and failing command so AWG-stage issues can be localized without guessing.
+- If `setup.sh` fails, it now prints the active step always; for unhandled errors it also shows the failing command so AWG-stage issues can be localized without guessing.
 
 ### Uninstall
 

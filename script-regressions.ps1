@@ -62,6 +62,7 @@ Assert-Contains -Text $setup -Needle 'src/setup/70-output.sh' -Message 'setup.sh
 Assert-Match -Text $setup -Pattern 'set -Ee' -Message 'setup.sh must keep ERR trap propagation enabled so step-aware failures surface inside functions.'
 Assert-Match -Text $setup -Pattern 'CURRENT_STEP="bootstrap"' -Message 'setup.sh must initialize the current step tracker early.'
 Assert-Match -Text $setup -Pattern 'mark_step\(\)' -Message 'setup.sh must define a helper for updating the current step.'
+Assert-Contains -Text $setup -Needle '[${CURRENT_STEP:-unknown}]' -Message 'setup.sh must include the active step in explicit err() failures too.'
 Assert-Contains -Text $setup -Needle 'on_script_error "$?" "ERR" "$BASH_COMMAND"' -Message 'setup.sh must report the failing command in its error trap.'
 Assert-Contains -Text $setup -Needle 'mark_step "AmneziaWG: generate server private key"' -Message 'setup.sh must mark the server key generation step inside the AWG stage.'
 Assert-Contains -Text $setup -Needle 'mark_step "AmneziaWG: write awg0.conf"' -Message 'setup.sh must mark the AWG config write step so failures identify the exact config point.'

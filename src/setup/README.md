@@ -18,7 +18,7 @@ Description: Индекс модулей для сборки setup.sh. Этот 
 
 ## Назначение модулей
 
-- `00-bootstrap.sh` - shebang, глобальные переменные, CLI, логирование, step-aware trap и базовые инварианты запуска.
+- `00-bootstrap.sh` - shebang, глобальные переменные, CLI, логирование, step-aware trap/err и базовые инварианты запуска.
 - `10-helpers.sh` - общие helper-функции для Xray, cascade DNS proxy, ключей AWG с fallback на `wg`, credentials, validation и cleanup, включая резолв upstream cascade в IP чтобы не ловить DNS-лупы.
 - `20-system.sh` - системная подготовка, `apt`, `sysctl`, swapfile, Xray bootstrap, загрузка credentials и установка `wireguard-tools` для ключевого fallback AWG.
 - `30-xray.sh` - cleanup legacy `x-ui` и построение дефолтной ссылки `VLESS`.
