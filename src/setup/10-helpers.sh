@@ -25,6 +25,11 @@ resolve_xray_bin() {
     command -v xray 2>/dev/null || true
 }
 
+resolve_awg_key_bin() {
+    # Prefer the stable WireGuard CLI for key material; fall back to awg if needed.
+    command -v wg 2>/dev/null || command -v awg 2>/dev/null || true
+}
+
 trim_cr_value() {
     printf '%s' "$1" | tr -d '\r'
 }
@@ -502,6 +507,12 @@ ensure_awg_build_dependencies() {
 }
 
 load_existing_awg_credentials() {
+    local awg_key_bin="${AWG_KEY_BIN:-}"
+
+    if [ -z "$awg_key_bin" ]; then
+        awg_key_bin="$(resolve_awg_key_bin || true)"
+    fi
+
     if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
         log "Загрузка существующих credentials AmneziaWG из $CREDS_FILE..."
         SERVER_PRIV=$(read_cred_value "AWG_SERVER_PRIV" "$CREDS_FILE")
@@ -538,8 +549,10 @@ load_existing_awg_credentials() {
         fi
     fi
 
-    [ -n "$SERVER_PRIV" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | awg pubkey)
-    [ -n "$CLIENT_PRIV" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | awg pubkey)
+    [ -n "$awg_key_bin" ] || err "Не найден awg/wg для восстановления ключей AmneziaWG."
+
+    [ -n "$SERVER_PRIV" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$awg_key_bin" pubkey)
+    [ -n "$CLIENT_PRIV" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$awg_key_bin" pubkey)
 }
 
 validate_stack() {

@@ -23,7 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.2.1"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -129,6 +129,11 @@ install_xray_core() {
 
 resolve_xray_bin() {
     command -v xray 2>/dev/null || true
+}
+
+resolve_awg_key_bin() {
+    # Prefer the stable WireGuard CLI for key material; fall back to awg if needed.
+    command -v wg 2>/dev/null || command -v awg 2>/dev/null || true
 }
 
 trim_cr_value() {
@@ -608,6 +613,12 @@ ensure_awg_build_dependencies() {
 }
 
 load_existing_awg_credentials() {
+    local awg_key_bin="${AWG_KEY_BIN:-}"
+
+    if [ -z "$awg_key_bin" ]; then
+        awg_key_bin="$(resolve_awg_key_bin || true)"
+    fi
+
     if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
         log "Загрузка существующих credentials AmneziaWG из $CREDS_FILE..."
         SERVER_PRIV=$(read_cred_value "AWG_SERVER_PRIV" "$CREDS_FILE")
@@ -644,8 +655,10 @@ load_existing_awg_credentials() {
         fi
     fi
 
-    [ -n "$SERVER_PRIV" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | awg pubkey)
-    [ -n "$CLIENT_PRIV" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | awg pubkey)
+    [ -n "$awg_key_bin" ] || err "Не найден awg/wg для восстановления ключей AmneziaWG."
+
+    [ -n "$SERVER_PRIV" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$awg_key_bin" pubkey)
+    [ -n "$CLIENT_PRIV" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$awg_key_bin" pubkey)
 }
 
 validate_stack() {
@@ -716,7 +729,7 @@ if [ "$SKIP_APT" -eq 0 ]; then
     apt update && apt upgrade -y
     # Базовые пакеты и точные headers текущего ядра для детерминированной сборки AWG.
     apt install -y curl wget mc ufw fail2ban nano iptables iptables-persistent \
-                   jq openssl whois qrencode dnsutils python3 "linux-headers-$(uname -r)" \
+                   jq openssl whois qrencode dnsutils python3 wireguard-tools "linux-headers-$(uname -r)" \
         || err "Не удалось установить обязательные пакеты и точные kernel headers для $(uname -r)."
     # Обновляем дату последнего полного запуска
     date +%Y-%m-%d > "$LAST_RUN_FILE"
@@ -726,6 +739,7 @@ else
     command -v openssl >/dev/null 2>&1 || apt install -y openssl
     command -v python3 >/dev/null 2>&1 || apt install -y python3
     command -v dig >/dev/null 2>&1 || apt install -y dnsutils
+    command -v wg >/dev/null 2>&1 || apt install -y wireguard-tools
 fi
 
 if [ "$SKIP_APT" -eq 0 ]; then
@@ -879,6 +893,8 @@ mkdir -p /etc/amnezia/amneziawg
 chmod 700 /etc/amnezia/amneziawg
 
 AWG_PORT=51820
+AWG_KEY_BIN="$(resolve_awg_key_bin || true)"
+[ -n "$AWG_KEY_BIN" ] || err "Не найден awg/wg после установки AmneziaWG."
 load_existing_awg_credentials
 
 # Параметры обфускации (Рандомизация для защиты от сигнатурного анализа ТСПУ 2026)
@@ -894,11 +910,11 @@ load_existing_awg_credentials
 # Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
-[ -z "$SERVER_PRIV" ] && SERVER_PRIV=$(awg genkey)
-[ -z "$CLIENT_PRIV" ] && CLIENT_PRIV=$(awg genkey)
-[ -z "$CLIENT_PSK" ] && CLIENT_PSK=$(awg genpsk)
-[ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | awg pubkey)
-[ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | awg pubkey)
+[ -z "$SERVER_PRIV" ] && SERVER_PRIV=$("$AWG_KEY_BIN" genkey)
+[ -z "$CLIENT_PRIV" ] && CLIENT_PRIV=$("$AWG_KEY_BIN" genkey)
+[ -z "$CLIENT_PSK" ] && CLIENT_PSK=$("$AWG_KEY_BIN" genpsk)
+[ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$AWG_KEY_BIN" pubkey)
+[ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$AWG_KEY_BIN" pubkey)
 
 cat <<EOF > /etc/amnezia/amneziawg/awg0.conf
 [Interface]

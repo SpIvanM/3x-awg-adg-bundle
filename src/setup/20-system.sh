@@ -12,7 +12,7 @@ if [ "$SKIP_APT" -eq 0 ]; then
     apt update && apt upgrade -y
     # Базовые пакеты и точные headers текущего ядра для детерминированной сборки AWG.
     apt install -y curl wget mc ufw fail2ban nano iptables iptables-persistent \
-                   jq openssl whois qrencode dnsutils python3 "linux-headers-$(uname -r)" \
+                   jq openssl whois qrencode dnsutils python3 wireguard-tools "linux-headers-$(uname -r)" \
         || err "Не удалось установить обязательные пакеты и точные kernel headers для $(uname -r)."
     # Обновляем дату последнего полного запуска
     date +%Y-%m-%d > "$LAST_RUN_FILE"
@@ -22,6 +22,7 @@ else
     command -v openssl >/dev/null 2>&1 || apt install -y openssl
     command -v python3 >/dev/null 2>&1 || apt install -y python3
     command -v dig >/dev/null 2>&1 || apt install -y dnsutils
+    command -v wg >/dev/null 2>&1 || apt install -y wireguard-tools
 fi
 
 if [ "$SKIP_APT" -eq 0 ]; then

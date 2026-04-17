@@ -35,6 +35,8 @@ mkdir -p /etc/amnezia/amneziawg
 chmod 700 /etc/amnezia/amneziawg
 
 AWG_PORT=51820
+AWG_KEY_BIN="$(resolve_awg_key_bin || true)"
+[ -n "$AWG_KEY_BIN" ] || err "Не найден awg/wg после установки AmneziaWG."
 load_existing_awg_credentials
 
 # Параметры обфускации (Рандомизация для защиты от сигнатурного анализа ТСПУ 2026)
@@ -50,11 +52,11 @@ load_existing_awg_credentials
 # Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
-[ -z "$SERVER_PRIV" ] && SERVER_PRIV=$(awg genkey)
-[ -z "$CLIENT_PRIV" ] && CLIENT_PRIV=$(awg genkey)
-[ -z "$CLIENT_PSK" ] && CLIENT_PSK=$(awg genpsk)
-[ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | awg pubkey)
-[ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | awg pubkey)
+[ -z "$SERVER_PRIV" ] && SERVER_PRIV=$("$AWG_KEY_BIN" genkey)
+[ -z "$CLIENT_PRIV" ] && CLIENT_PRIV=$("$AWG_KEY_BIN" genkey)
+[ -z "$CLIENT_PSK" ] && CLIENT_PSK=$("$AWG_KEY_BIN" genpsk)
+[ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$AWG_KEY_BIN" pubkey)
+[ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$AWG_KEY_BIN" pubkey)
 
 cat <<EOF > /etc/amnezia/amneziawg/awg0.conf
 [Interface]

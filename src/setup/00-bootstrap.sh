@@ -23,7 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.2.1"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
