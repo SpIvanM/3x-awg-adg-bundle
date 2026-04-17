@@ -551,8 +551,13 @@ load_existing_awg_credentials() {
 
     [ -n "$awg_key_bin" ] || err "Не найден awg/wg для восстановления ключей AmneziaWG."
 
-    [ -n "$SERVER_PRIV" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$awg_key_bin" pubkey)
-    [ -n "$CLIENT_PRIV" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$awg_key_bin" pubkey)
+    if [ -n "$SERVER_PRIV" ]; then
+        SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$awg_key_bin" pubkey)
+    fi
+
+    if [ -n "$CLIENT_PRIV" ]; then
+        CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$awg_key_bin" pubkey)
+    fi
 }
 
 validate_stack() {

@@ -54,7 +54,7 @@ function Assert-Contains {
 }
 
 Assert-Match -Text $setup -Pattern 'install-release\.sh' -Message 'setup.sh must use the official Xray installer.'
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="2\.2\.2"' -Message 'setup.sh must expose the current installer version and bump it with each scripted change.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="2\.2\.3"' -Message 'setup.sh must expose the current installer version and bump it with each scripted change.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version so operators can verify the deployed revision.'
 Assert-Contains -Text $setup -Needle 'Assembled from source modules' -Message 'setup.sh must declare that it is built from modular source files.'
 Assert-Contains -Text $setup -Needle 'src/setup/00-bootstrap.sh' -Message 'setup.sh must document the modular source layout in its generated header.'
@@ -151,6 +151,10 @@ Assert-Match -Text $setup -Pattern '\[ -z "\$SERVER_PRIV" \] && SERVER_PRIV=\$\(
 Assert-Match -Text $setup -Pattern '\[ -z "\$CLIENT_PRIV" \] && CLIENT_PRIV=\$\("\$AWG_KEY_BIN" genkey\)' -Message 'setup.sh must only generate a new AWG client private key when none was restored.'
 Assert-Match -Text $setup -Pattern '\[ -z "\$CLIENT_PSK" \] && CLIENT_PSK=\$\("\$AWG_KEY_BIN" genpsk\)' -Message 'setup.sh must only generate a new AWG preshared key when none was restored.'
 Assert-Contains -Text $setup -Needle '"$AWG_KEY_BIN" pubkey' -Message 'setup.sh must derive AWG public keys through the resolved key tool.'
+Assert-Contains -Text $setup -Needle 'if [ -n "$SERVER_PRIV" ]; then' -Message 'setup.sh must derive the AWG server public key through a safe conditional branch under set -e.'
+Assert-Contains -Text $setup -Needle 'if [ -n "$CLIENT_PRIV" ]; then' -Message 'setup.sh must derive the AWG client public key through a safe conditional branch under set -e.'
+Assert-NotMatch -Text $setup -Pattern '\[ -n "\$SERVER_PRIV" \] && SERVER_PUB=' -Message 'setup.sh must not use bare test-and-assignment for the AWG server public key under set -e.'
+Assert-NotMatch -Text $setup -Pattern '\[ -n "\$CLIENT_PRIV" \] && CLIENT_PUB=' -Message 'setup.sh must not use bare test-and-assignment for the AWG client public key under set -e.'
 Assert-Match -Text $setup -Pattern 'CASCADE_ENABLED=\${CASCADE_ENABLED}' -Message 'setup.sh must persist whether cascade mode is enabled.'
 Assert-Match -Text $setup -Pattern 'CASCADE_MODE=\${CASCADE_MODE}' -Message 'setup.sh must persist the selected cascade mode.'
 Assert-Match -Text $setup -Pattern 'CASCADE_VLESS=\${CASCADE_VLESS}' -Message 'setup.sh must persist the original cascade VLESS URI.'

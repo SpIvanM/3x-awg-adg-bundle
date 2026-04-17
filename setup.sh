@@ -23,7 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.2.2"
+SCRIPT_VERSION="2.2.3"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -672,8 +672,13 @@ load_existing_awg_credentials() {
 
     [ -n "$awg_key_bin" ] || err "Не найден awg/wg для восстановления ключей AmneziaWG."
 
-    [ -n "$SERVER_PRIV" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$awg_key_bin" pubkey)
-    [ -n "$CLIENT_PRIV" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$awg_key_bin" pubkey)
+    if [ -n "$SERVER_PRIV" ]; then
+        SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$awg_key_bin" pubkey)
+    fi
+
+    if [ -n "$CLIENT_PRIV" ]; then
+        CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$awg_key_bin" pubkey)
+    fi
 }
 
 validate_stack() {
@@ -949,8 +954,13 @@ mark_step "AmneziaWG: generate client private key"
 mark_step "AmneziaWG: generate client preshared key"
 [ -z "$CLIENT_PSK" ] && CLIENT_PSK=$("$AWG_KEY_BIN" genpsk)
 mark_step "AmneziaWG: derive public keys"
-[ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$AWG_KEY_BIN" pubkey)
-[ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$AWG_KEY_BIN" pubkey)
+if [ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ]; then
+    SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$AWG_KEY_BIN" pubkey)
+fi
+
+if [ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ]; then
+    CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$AWG_KEY_BIN" pubkey)
+fi
 
 mark_step "AmneziaWG: write awg0.conf"
 cat <<EOF > /etc/amnezia/amneziawg/awg0.conf

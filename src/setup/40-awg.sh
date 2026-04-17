@@ -67,8 +67,13 @@ mark_step "AmneziaWG: generate client private key"
 mark_step "AmneziaWG: generate client preshared key"
 [ -z "$CLIENT_PSK" ] && CLIENT_PSK=$("$AWG_KEY_BIN" genpsk)
 mark_step "AmneziaWG: derive public keys"
-[ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$AWG_KEY_BIN" pubkey)
-[ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$AWG_KEY_BIN" pubkey)
+if [ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ]; then
+    SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$AWG_KEY_BIN" pubkey)
+fi
+
+if [ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ]; then
+    CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$AWG_KEY_BIN" pubkey)
+fi
 
 mark_step "AmneziaWG: write awg0.conf"
 cat <<EOF > /etc/amnezia/amneziawg/awg0.conf
