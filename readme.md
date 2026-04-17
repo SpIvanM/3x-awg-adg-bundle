@@ -72,6 +72,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```
 
 - Повторный запуск без `--rotate` должен переиспользовать текущие credentials `Xray`, `AdGuardHome` и `AmneziaWG`, а не пересоздавать клиентский AWG-профиль.
+- При повторном запуске сохранённые credentials и восстановленные значения из существующих конфигов нормализуются от `CRLF`, чтобы Windows-переносы строк не попадали внутрь `Xray` JSON и `AWG`/`AGH` runtime-конфигов.
 
 ### Удаление
 

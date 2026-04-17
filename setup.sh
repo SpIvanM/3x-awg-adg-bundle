@@ -57,6 +57,37 @@ resolve_xray_bin() {
     command -v xray 2>/dev/null || true
 }
 
+trim_cr_value() {
+    printf '%s' "$1" | tr -d '\r'
+}
+
+read_cred_value() {
+    local key="$1"
+    local file="$2"
+    local raw
+
+    raw=$(grep "^${key}=" "$file" 2>/dev/null | head -n1 | cut -d'=' -f2- | xargs || true)
+    trim_cr_value "$raw"
+}
+
+read_config_assignment() {
+    local prefix="$1"
+    local file="$2"
+    local raw
+
+    raw=$(grep "^${prefix}" "$file" 2>/dev/null | head -n1 | cut -d'=' -f2- | xargs || true)
+    trim_cr_value "$raw"
+}
+
+read_url_port() {
+    local key="$1"
+    local file="$2"
+    local raw
+
+    raw=$(grep "^${key}=" "$file" 2>/dev/null | head -n1 | sed -e 's|.*:| |' -e 's|/.*||' | xargs || true)
+    trim_cr_value "$raw"
+}
+
 # Парсит вывод xray x25519 в переменные XRAY_PRIVATE_KEY и XRAY_PUBLIC_KEY.
 # Поддерживает старый формат ("Private key:"/"Public key:") и
 # новый формат xray >= v26.3 ("PrivateKey:"/"Password (PublicKey):").
@@ -275,37 +306,37 @@ ensure_awg_build_dependencies() {
 load_existing_awg_credentials() {
     if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
         log "Загрузка существующих credentials AmneziaWG из $CREDS_FILE..."
-        SERVER_PRIV=$(grep "^AWG_SERVER_PRIV=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        CLIENT_PRIV=$(grep "^AWG_CLIENT_PRIV=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        CLIENT_PSK=$(grep "^AWG_CLIENT_PSK=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        AWG_PORT=$(grep "^AWG_PORT=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        JC=$(grep "^AWG_JC=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        JMIN=$(grep "^AWG_JMIN=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        JMAX=$(grep "^AWG_JMAX=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        S1=$(grep "^AWG_S1=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        S2=$(grep "^AWG_S2=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        H1=$(grep "^AWG_H1=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        H2=$(grep "^AWG_H2=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        H3=$(grep "^AWG_H3=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
-        H4=$(grep "^AWG_H4=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        SERVER_PRIV=$(read_cred_value "AWG_SERVER_PRIV" "$CREDS_FILE")
+        CLIENT_PRIV=$(read_cred_value "AWG_CLIENT_PRIV" "$CREDS_FILE")
+        CLIENT_PSK=$(read_cred_value "AWG_CLIENT_PSK" "$CREDS_FILE")
+        AWG_PORT=$(read_cred_value "AWG_PORT" "$CREDS_FILE")
+        JC=$(read_cred_value "AWG_JC" "$CREDS_FILE")
+        JMIN=$(read_cred_value "AWG_JMIN" "$CREDS_FILE")
+        JMAX=$(read_cred_value "AWG_JMAX" "$CREDS_FILE")
+        S1=$(read_cred_value "AWG_S1" "$CREDS_FILE")
+        S2=$(read_cred_value "AWG_S2" "$CREDS_FILE")
+        H1=$(read_cred_value "AWG_H1" "$CREDS_FILE")
+        H2=$(read_cred_value "AWG_H2" "$CREDS_FILE")
+        H3=$(read_cred_value "AWG_H3" "$CREDS_FILE")
+        H4=$(read_cred_value "AWG_H4" "$CREDS_FILE")
     fi
 
     if [ -z "$SERVER_PRIV" ] || [ -z "$CLIENT_PRIV" ] || [ -z "$CLIENT_PSK" ]; then
         if [ -f /etc/amnezia/amneziawg/awg0.conf ] && [ -f /root/amnezia_client.conf ] && [ "$ROTATE_CREDS" -eq 0 ]; then
             log "Восстанавливаем существующие credentials AmneziaWG из текущих конфигов..."
-            SERVER_PRIV=$(grep "^PrivateKey = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            CLIENT_PRIV=$(grep "^PrivateKey = " /root/amnezia_client.conf | head -n1 | cut -d'=' -f2- | xargs)
-            CLIENT_PSK=$(grep "^PresharedKey = " /root/amnezia_client.conf | head -n1 | cut -d'=' -f2- | xargs)
-            AWG_PORT=$(grep "^ListenPort = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            JC=$(grep "^Jc = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            JMIN=$(grep "^Jmin = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            JMAX=$(grep "^Jmax = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            S1=$(grep "^S1 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            S2=$(grep "^S2 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            H1=$(grep "^H1 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            H2=$(grep "^H2 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            H3=$(grep "^H3 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
-            H4=$(grep "^H4 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            SERVER_PRIV=$(read_config_assignment "PrivateKey = " /etc/amnezia/amneziawg/awg0.conf)
+            CLIENT_PRIV=$(read_config_assignment "PrivateKey = " /root/amnezia_client.conf)
+            CLIENT_PSK=$(read_config_assignment "PresharedKey = " /root/amnezia_client.conf)
+            AWG_PORT=$(read_config_assignment "ListenPort = " /etc/amnezia/amneziawg/awg0.conf)
+            JC=$(read_config_assignment "Jc = " /etc/amnezia/amneziawg/awg0.conf)
+            JMIN=$(read_config_assignment "Jmin = " /etc/amnezia/amneziawg/awg0.conf)
+            JMAX=$(read_config_assignment "Jmax = " /etc/amnezia/amneziawg/awg0.conf)
+            S1=$(read_config_assignment "S1 = " /etc/amnezia/amneziawg/awg0.conf)
+            S2=$(read_config_assignment "S2 = " /etc/amnezia/amneziawg/awg0.conf)
+            H1=$(read_config_assignment "H1 = " /etc/amnezia/amneziawg/awg0.conf)
+            H2=$(read_config_assignment "H2 = " /etc/amnezia/amneziawg/awg0.conf)
+            H3=$(read_config_assignment "H3 = " /etc/amnezia/amneziawg/awg0.conf)
+            H4=$(read_config_assignment "H4 = " /etc/amnezia/amneziawg/awg0.conf)
         fi
     fi
 
@@ -462,11 +493,11 @@ T_PORT=12345
 # Загружаем или генерируем новые credentials Xray
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
     log "Загрузка существующих credentials Xray из $CREDS_FILE..."
-    XRAY_UUID=$(grep "^XRAY_UUID=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-    XRAY_PRIVATE_KEY=$(grep "^XRAY_PRIVATE_KEY=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-    XRAY_PUBLIC_KEY=$(grep "^XRAY_PUBLIC_KEY=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-    XRAY_SHORT_ID=$(grep "^XRAY_SHORT_ID=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-    ADG_DNS_PORT=$(grep "^ADG_DNS_PORT=" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    XRAY_UUID=$(read_cred_value "XRAY_UUID" "$CREDS_FILE")
+    XRAY_PRIVATE_KEY=$(read_cred_value "XRAY_PRIVATE_KEY" "$CREDS_FILE")
+    XRAY_PUBLIC_KEY=$(read_cred_value "XRAY_PUBLIC_KEY" "$CREDS_FILE")
+    XRAY_SHORT_ID=$(read_cred_value "XRAY_SHORT_ID" "$CREDS_FILE")
+    ADG_DNS_PORT=$(read_cred_value "ADG_DNS_PORT" "$CREDS_FILE")
 fi
 
 # Если после загрузки переменные пустые, генерируем заново
@@ -667,10 +698,10 @@ log "Установка AdGuardHome..."
 # Загружаем или генерируем новые credentials AdGuardHome
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
     log "Загрузка существующих credentials AdGuardHome из $CREDS_FILE..."
-    ADG_PORT=$(grep "ADG_URL" "$CREDS_FILE" | sed -e 's|.*:| |' -e 's|/.*||' | xargs)
-    ADG_USER=$(grep "ADG_USER" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-    ADG_PASS=$(grep "ADG_PASS" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
-    ADG_DNS_PORT=$(grep "ADG_DNS_PORT" "$CREDS_FILE" | cut -d'=' -f2 | xargs)
+    ADG_PORT=$(read_url_port "ADG_URL" "$CREDS_FILE")
+    ADG_USER=$(read_cred_value "ADG_USER" "$CREDS_FILE")
+    ADG_PASS=$(read_cred_value "ADG_PASS" "$CREDS_FILE")
+    ADG_DNS_PORT=$(read_cred_value "ADG_DNS_PORT" "$CREDS_FILE")
 fi
 
 # Если пустые, генерируем заново
