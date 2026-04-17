@@ -52,6 +52,8 @@ function Assert-Contains {
 }
 
 Assert-Match -Text $setup -Pattern 'install-release\.sh' -Message 'setup.sh must use the official Xray installer.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="2\.1\.1"' -Message 'setup.sh must expose the current installer version and bump it with each scripted change.'
+Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version so operators can verify the deployed revision.'
 Assert-Match -Text $setup -Pattern 'XRAY_VERSION_PIN="25\.1\.30"' -Message 'setup.sh must pin the Xray version that currently avoids the transparent-listener regression.'
 Assert-Contains -Text $setup -Needle '@ install --version "$XRAY_VERSION_PIN"' -Message 'setup.sh must install Xray through the official installer with the pinned stable version.'
 Assert-Match -Text $setup -Pattern '/usr/local/etc/xray/config\.json' -Message 'setup.sh must write the Xray config to the official path.'

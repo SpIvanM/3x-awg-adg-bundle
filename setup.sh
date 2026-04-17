@@ -14,7 +14,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.1.0"
+SCRIPT_VERSION="2.1.1"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -75,6 +75,8 @@ RESET="\e[0m"
 log() { echo -e "${GREEN}[INFO] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
 err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
+
+log "Версия скрипта: ${SCRIPT_VERSION}"
 
 install_xray_core() {
     local current_xray_version=""
