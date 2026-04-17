@@ -19,10 +19,10 @@ Description: Индекс модулей для сборки setup.sh. Этот 
 ## Назначение модулей
 
 - `00-bootstrap.sh` - shebang, глобальные переменные, CLI, логирование, trap и базовые инварианты запуска.
-- `10-helpers.sh` - общие helper-функции для Xray, cascade, credentials, validation и cleanup, включая резолв upstream cascade в IP чтобы не ловить DNS-лупы.
+- `10-helpers.sh` - общие helper-функции для Xray, cascade DNS proxy, credentials, validation и cleanup, включая резолв upstream cascade в IP чтобы не ловить DNS-лупы.
 - `20-system.sh` - системная подготовка, `apt`, `sysctl`, swapfile, Xray bootstrap и загрузка credentials.
-- `30-xray.sh` - cleanup legacy `x-ui`, cascade mode и построение дефолтной ссылки `VLESS`.
-- `40-awg.sh` - установка и конфигурация AmneziaWG.
+- `30-xray.sh` - cleanup legacy `x-ui` и построение дефолтной ссылки `VLESS`.
+- `40-awg.sh` - установка и конфигурация AmneziaWG с direct NAT egress и DNS DNAT к AdGuardHome.
 - `50-adguard.sh` - установка и конфигурация AdGuardHome и финальная запись Xray config.
 - `60-firewall.sh` - `UFW`, `SSH`, `Fail2Ban` и системная валидация стека.
 - `70-output.sh` - cleanup, сохранение credentials и финальный вывод оператору.

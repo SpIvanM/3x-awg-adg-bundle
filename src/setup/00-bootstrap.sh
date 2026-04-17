@@ -11,8 +11,8 @@
 #   - src/setup/60-firewall.sh
 #   - src/setup/70-output.sh
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate] [--cascade-vless 'vless://...'] [--cascade-mode auto]
-# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, can route non-RU AWG traffic through an upstream Reality exit, and proxies AdGuardHome DNS upstreams through local Xray.
-# Returns: Complete VPN and DNS server proxy routing.
+# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, keeps AWG on direct NAT egress, and can still proxy AdGuardHome DNS upstreams through a cascade Reality exit when requested.
+# Returns: Direct VPN egress plus DNS server proxy routing.
 # Fails: If run without root privileges.
 # ==============================================================================
 # Комплексный скрипт настройки Debian 11/Ubuntu: OS Optimization + Xray Reality + AmneziaWG + AdGuardHome
@@ -23,7 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.1.4"
+SCRIPT_VERSION="2.2.0"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"

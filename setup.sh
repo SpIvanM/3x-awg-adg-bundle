@@ -11,8 +11,8 @@
 #   - src/setup/60-firewall.sh
 #   - src/setup/70-output.sh
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate] [--cascade-vless 'vless://...'] [--cascade-mode auto]
-# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, can route non-RU AWG traffic through an upstream Reality exit, and proxies AdGuardHome DNS upstreams through local Xray.
-# Returns: Complete VPN and DNS server proxy routing.
+# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, keeps AWG on direct NAT egress, and can still proxy AdGuardHome DNS upstreams through a cascade Reality exit when requested.
+# Returns: Direct VPN egress plus DNS server proxy routing.
 # Fails: If run without root privileges.
 # ==============================================================================
 # Комплексный скрипт настройки Debian 11/Ubuntu: OS Optimization + Xray Reality + AmneziaWG + AdGuardHome
@@ -23,7 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.1.4"
+SCRIPT_VERSION="2.2.0"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -365,7 +365,8 @@ configure_cascade_mode() {
         parse_cascade_vless_uri
         resolve_cascade_upstream_address
         CASCADE_ENABLED=1
-        FINAL_MODE="cascade-auto"
+        FINAL_MODE="direct"
+        log "Cascade mode теперь влияет только на DNS-выход AdGuardHome; AWG-трафик остаётся direct."
         return 0
     fi
 
@@ -380,7 +381,6 @@ write_xray_config() {
     XRAY_UUID="$XRAY_UUID" \
     XRAY_PRIVATE_KEY="$XRAY_PRIVATE_KEY" \
     XRAY_SHORT_ID="$XRAY_SHORT_ID" \
-    T_PORT="$T_PORT" \
     ADG_DNS_PORT="$ADG_DNS_PORT" \
     ADG_HTTP_PROXY_PORT="$ADG_HTTP_PROXY_PORT" \
     CASCADE_ENABLED="$CASCADE_ENABLED" \
@@ -419,13 +419,6 @@ direct_outbound = {
 block_outbound = {
     "tag": "block-out",
     "protocol": "blackhole",
-}
-
-vpn_default_rule = {
-    "type": "field",
-    "ruleTag": "vpn-default",
-    "inboundTag": ["tproxy-in"],
-    "outboundTag": "direct-out",
 }
 
 adg_http_proxy_rule = {
@@ -486,26 +479,6 @@ config = {
                     "header": {
                         "type": "none",
                     },
-                },
-            },
-        },
-        {
-            "tag": "tproxy-in",
-            "listen": "0.0.0.0",
-            "port": int(os.environ["T_PORT"]),
-            "protocol": "dokodemo-door",
-            "settings": {
-                "network": "tcp,udp",
-                "followRedirect": True,
-            },
-            "sniffing": {
-                "enabled": True,
-                "destOverride": ["http", "tls", "quic"],
-                "routeOnly": True,
-            },
-            "streamSettings": {
-                "sockopt": {
-                    "tproxy": "tproxy",
                 },
             },
         },
@@ -572,7 +545,6 @@ config = {
                 "protocol": ["bittorrent"],
                 "outboundTag": "block-out",
             },
-            vpn_default_rule,
         ],
     },
 }
@@ -613,7 +585,6 @@ if cascade_enabled:
     }
     config["outbounds"].append(exit_us_outbound)
     adg_http_proxy_rule["outboundTag"] = "exit-us"
-    vpn_default_rule["outboundTag"] = "exit-us"
 
 json.dump(config, sys.stdout, indent=2)
 sys.stdout.write("\n")
@@ -687,13 +658,9 @@ validate_stack() {
     systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
 
     ss -lntup | grep -Eq ':443 ' || err "Xray не слушает порт 443."
-    ss -lntup | grep -Eq ':12345 ' || err "Xray не слушает TProxy порт 12345."
     ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
-    sysctl -n net.ipv4.conf.all.src_valid_mark | grep -qx '1' || err "src_valid_mark не включён, TProxy-marked пакеты могут отбрасываться policy routing."
-    iptables -C INPUT -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT \
-        || err "Нет INPUT-исключения для marked TProxy-пакетов awg0: UFW может дропать AWG интернет-трафик."
 }
 
 cleanup_legacy_awg_dns_redirects() {
@@ -790,11 +757,6 @@ net.ipv4.tcp_mtu_probing = 1
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.ip_forward = 1
-# Требуется для TProxy: позволяет направлять трафик на loopback-адреса
-net.ipv4.conf.all.route_localnet = 1
-# Требуется для TProxy policy routing по fwmark, иначе ядро/UFW могут отбрасывать marked-пакеты.
-net.ipv4.conf.all.src_valid_mark = 1
-net.ipv4.conf.default.src_valid_mark = 1
 EOF
 sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || true
 
@@ -805,7 +767,6 @@ log "Проверка и установка Xray-core..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
 XRAY_PORT=443
-T_PORT=12345
 
 # Загружаем или генерируем новые credentials Xray
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
@@ -874,9 +835,9 @@ remove_legacy_xui
 configure_cascade_mode
 
 if [ "$CASCADE_ENABLED" -eq 1 ]; then
-    log "Cascade mode включён: non-RU AWG трафик пойдёт через upstream Reality exit-us."
+    log "Cascade mode включён: upstream Reality exit-us используется только для DNS-выхода AdGuardHome."
 else
-    log "Cascade mode выключен: система работает в direct-exit режиме."
+    log "Cascade mode выключен: AWG идёт direct, а DNS upstream AdGuardHome остаётся на локальном Xray HTTP proxy."
 fi
 
 VLESS_LINK="vless://$XRAY_UUID@$SERVER_IP:$XRAY_PORT?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&pbk=$XRAY_PUBLIC_KEY&headerType=none&fp=chrome&spx=%2F&sni=google.com&sid=$XRAY_SHORT_ID#VLESS-Reality-Default"
@@ -954,45 +915,15 @@ H2 = $H2
 H3 = $H3
 H4 = $H4
 
-# Правила NAT и маршрутизации (TPROXY активен)
+# AWG-клиенты выходят напрямую через публичный интерфейс. DNS по-прежнему идёт в AdGuardHome.
 PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE
 # DNAT: перенаправляем DNS от VPN-клиентов (порт 53) -> AdGuardHome (порт $ADG_DNS_PORT)
 PostUp = iptables -t nat -A PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT
 PostUp = iptables -t nat -A PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT
 
-# TProxy Routing (REDIRECT AWG traffic to Xray)
-PostUp = ip rule add fwmark 1 table 100 2>/dev/null || true
-PostUp = ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
-PostUp = iptables -t mangle -N AWG_TPROXY 2>/dev/null || true
-PostUp = iptables -t mangle -F AWG_TPROXY
-PostUp = iptables -t mangle -A AWG_TPROXY -d 0.0.0.0/8 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 10.0.0.0/8 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 100.64.0.0/10 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 127.0.0.0/8 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 169.254.0.0/16 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 172.16.0.0/12 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 192.168.0.0/16 -p tcp ! --dport 53 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 192.168.0.0/16 -p udp ! --dport 53 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 224.0.0.0/4 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 240.0.0.0/4 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d $SERVER_IP -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -p udp --dport 53 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -p tcp --dport 53 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
-PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
-PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
-# UFW видит TProxy-пакеты как non-local и может уронить их в ufw-not-local без явного allow по mark.
-PostUp = iptables -I INPUT 1 -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT
-
 PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE 2>/dev/null || true
 PostDown = iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT 2>/dev/null || true
 PostDown = iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT 2>/dev/null || true
-PostDown = iptables -t mangle -D PREROUTING -i awg0 -j AWG_TPROXY 2>/dev/null || true
-PostDown = iptables -t mangle -F AWG_TPROXY 2>/dev/null || true
-PostDown = iptables -t mangle -X AWG_TPROXY 2>/dev/null || true
-PostDown = iptables -D INPUT -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT 2>/dev/null || true
-PostDown = ip rule del fwmark 1 table 100 2>/dev/null || true
-PostDown = ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 
 [Peer]
 PublicKey = $CLIENT_PUB

@@ -53,11 +53,6 @@ net.ipv4.tcp_mtu_probing = 1
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.ip_forward = 1
-# Требуется для TProxy: позволяет направлять трафик на loopback-адреса
-net.ipv4.conf.all.route_localnet = 1
-# Требуется для TProxy policy routing по fwmark, иначе ядро/UFW могут отбрасывать marked-пакеты.
-net.ipv4.conf.all.src_valid_mark = 1
-net.ipv4.conf.default.src_valid_mark = 1
 EOF
 sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || true
 
@@ -68,7 +63,6 @@ log "Проверка и установка Xray-core..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
 XRAY_PORT=443
-T_PORT=12345
 
 # Загружаем или генерируем новые credentials Xray
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then

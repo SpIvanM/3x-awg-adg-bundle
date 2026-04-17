@@ -259,7 +259,8 @@ configure_cascade_mode() {
         parse_cascade_vless_uri
         resolve_cascade_upstream_address
         CASCADE_ENABLED=1
-        FINAL_MODE="cascade-auto"
+        FINAL_MODE="direct"
+        log "Cascade mode теперь влияет только на DNS-выход AdGuardHome; AWG-трафик остаётся direct."
         return 0
     fi
 
@@ -274,7 +275,6 @@ write_xray_config() {
     XRAY_UUID="$XRAY_UUID" \
     XRAY_PRIVATE_KEY="$XRAY_PRIVATE_KEY" \
     XRAY_SHORT_ID="$XRAY_SHORT_ID" \
-    T_PORT="$T_PORT" \
     ADG_DNS_PORT="$ADG_DNS_PORT" \
     ADG_HTTP_PROXY_PORT="$ADG_HTTP_PROXY_PORT" \
     CASCADE_ENABLED="$CASCADE_ENABLED" \
@@ -313,13 +313,6 @@ direct_outbound = {
 block_outbound = {
     "tag": "block-out",
     "protocol": "blackhole",
-}
-
-vpn_default_rule = {
-    "type": "field",
-    "ruleTag": "vpn-default",
-    "inboundTag": ["tproxy-in"],
-    "outboundTag": "direct-out",
 }
 
 adg_http_proxy_rule = {
@@ -380,26 +373,6 @@ config = {
                     "header": {
                         "type": "none",
                     },
-                },
-            },
-        },
-        {
-            "tag": "tproxy-in",
-            "listen": "0.0.0.0",
-            "port": int(os.environ["T_PORT"]),
-            "protocol": "dokodemo-door",
-            "settings": {
-                "network": "tcp,udp",
-                "followRedirect": True,
-            },
-            "sniffing": {
-                "enabled": True,
-                "destOverride": ["http", "tls", "quic"],
-                "routeOnly": True,
-            },
-            "streamSettings": {
-                "sockopt": {
-                    "tproxy": "tproxy",
                 },
             },
         },
@@ -466,7 +439,6 @@ config = {
                 "protocol": ["bittorrent"],
                 "outboundTag": "block-out",
             },
-            vpn_default_rule,
         ],
     },
 }
@@ -507,7 +479,6 @@ if cascade_enabled:
     }
     config["outbounds"].append(exit_us_outbound)
     adg_http_proxy_rule["outboundTag"] = "exit-us"
-    vpn_default_rule["outboundTag"] = "exit-us"
 
 json.dump(config, sys.stdout, indent=2)
 sys.stdout.write("\n")
@@ -581,13 +552,9 @@ validate_stack() {
     systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
 
     ss -lntup | grep -Eq ':443 ' || err "Xray не слушает порт 443."
-    ss -lntup | grep -Eq ':12345 ' || err "Xray не слушает TProxy порт 12345."
     ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
-    sysctl -n net.ipv4.conf.all.src_valid_mark | grep -qx '1' || err "src_valid_mark не включён, TProxy-marked пакеты могут отбрасываться policy routing."
-    iptables -C INPUT -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT \
-        || err "Нет INPUT-исключения для marked TProxy-пакетов awg0: UFW может дропать AWG интернет-трафик."
 }
 
 cleanup_legacy_awg_dns_redirects() {

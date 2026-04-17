@@ -71,45 +71,15 @@ H2 = $H2
 H3 = $H3
 H4 = $H4
 
-# Правила NAT и маршрутизации (TPROXY активен)
+# AWG-клиенты выходят напрямую через публичный интерфейс. DNS по-прежнему идёт в AdGuardHome.
 PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE
 # DNAT: перенаправляем DNS от VPN-клиентов (порт 53) -> AdGuardHome (порт $ADG_DNS_PORT)
 PostUp = iptables -t nat -A PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT
 PostUp = iptables -t nat -A PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT
 
-# TProxy Routing (REDIRECT AWG traffic to Xray)
-PostUp = ip rule add fwmark 1 table 100 2>/dev/null || true
-PostUp = ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
-PostUp = iptables -t mangle -N AWG_TPROXY 2>/dev/null || true
-PostUp = iptables -t mangle -F AWG_TPROXY
-PostUp = iptables -t mangle -A AWG_TPROXY -d 0.0.0.0/8 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 10.0.0.0/8 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 100.64.0.0/10 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 127.0.0.0/8 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 169.254.0.0/16 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 172.16.0.0/12 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 192.168.0.0/16 -p tcp ! --dport 53 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 192.168.0.0/16 -p udp ! --dport 53 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 224.0.0.0/4 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 240.0.0.0/4 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d $SERVER_IP -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -p udp --dport 53 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -p tcp --dport 53 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
-PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
-PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
-# UFW видит TProxy-пакеты как non-local и может уронить их в ufw-not-local без явного allow по mark.
-PostUp = iptables -I INPUT 1 -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT
-
 PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE 2>/dev/null || true
 PostDown = iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT 2>/dev/null || true
 PostDown = iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT 2>/dev/null || true
-PostDown = iptables -t mangle -D PREROUTING -i awg0 -j AWG_TPROXY 2>/dev/null || true
-PostDown = iptables -t mangle -F AWG_TPROXY 2>/dev/null || true
-PostDown = iptables -t mangle -X AWG_TPROXY 2>/dev/null || true
-PostDown = iptables -D INPUT -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT 2>/dev/null || true
-PostDown = ip rule del fwmark 1 table 100 2>/dev/null || true
-PostDown = ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 
 [Peer]
 PublicKey = $CLIENT_PUB
