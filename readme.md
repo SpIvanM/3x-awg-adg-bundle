@@ -52,6 +52,7 @@ graph TD
 
 - Устанавливает `Xray-core 25.1.30` через официальный installer и не откатывается обратно на `latest` при повторном запуске.
 - Пишет конфиг в `/usr/local/etc/xray/config.json`.
+- Сам `setup.sh` теперь собирается из модулей в `src/setup/` через [`tools/build-setup.ps1`](tools/build-setup.ps1); `src/setup/README.md` описывает порядок и назначение частей.
 - Удаляет legacy `x-ui`, если он остался от предыдущих версий, чтобы не было split-brain control plane.
 - Поднимает `VLESS + Reality + Vision` inbound на `443`.
 - Держит единый `tproxy-in` inbound Xray c `network = "tcp,udp"` и `sockopt.tproxy = "tproxy"` без `sockopt.mark = 1`.
@@ -140,6 +141,7 @@ graph TD
 
 - Installs `Xray-core 25.1.30` using the official installer and keeps that pinned version on re-runs.
 - Writes the config to `/usr/local/etc/xray/config.json`.
+- The public `setup.sh` is assembled from modules under `src/setup/` by [`tools/build-setup.ps1`](tools/build-setup.ps1); `src/setup/README.md` documents the module order and responsibilities.
 - Removes legacy `x-ui` leftovers on re-runs so the host keeps a single Xray control plane.
 - Creates a `VLESS + Reality + Vision` inbound on port `443`.
 - Keeps a single Xray `tproxy-in` inbound with `network = "tcp,udp"` and `sockopt.tproxy = "tproxy"` only.

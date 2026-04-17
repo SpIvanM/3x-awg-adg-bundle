@@ -14,6 +14,8 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $readText = 'C:\Users\ivanm\.codex\tools\windows-text-io\Read-Text.ps1'
 $setup = & $readText -LiteralPath (Join-Path $repoRoot 'setup.sh')
 $uninstall = & $readText -LiteralPath (Join-Path $repoRoot 'uninstall.sh')
+$buildSetup = & $readText -LiteralPath (Join-Path $repoRoot 'tools\build-setup.ps1')
+$setupIndex = & $readText -LiteralPath (Join-Path $repoRoot 'src\setup\README.md')
 
 function Assert-Match {
     param(
@@ -52,8 +54,11 @@ function Assert-Contains {
 }
 
 Assert-Match -Text $setup -Pattern 'install-release\.sh' -Message 'setup.sh must use the official Xray installer.'
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="2\.1\.2"' -Message 'setup.sh must expose the current installer version and bump it with each scripted change.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="2\.1\.3"' -Message 'setup.sh must expose the current installer version and bump it with each scripted change.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version so operators can verify the deployed revision.'
+Assert-Contains -Text $setup -Needle 'Assembled from source modules' -Message 'setup.sh must declare that it is built from modular source files.'
+Assert-Contains -Text $setup -Needle 'src/setup/00-bootstrap.sh' -Message 'setup.sh must document the modular source layout in its generated header.'
+Assert-Contains -Text $setup -Needle 'src/setup/70-output.sh' -Message 'setup.sh must document the terminal output module in its generated header.'
 Assert-Match -Text $setup -Pattern 'XRAY_VERSION_PIN="25\.1\.30"' -Message 'setup.sh must pin the Xray version that currently avoids the transparent-listener regression.'
 Assert-Contains -Text $setup -Needle '@ install --version "$XRAY_VERSION_PIN"' -Message 'setup.sh must install Xray through the official installer with the pinned stable version.'
 Assert-Match -Text $setup -Pattern '/usr/local/etc/xray/config\.json' -Message 'setup.sh must write the Xray config to the official path.'
@@ -168,5 +173,16 @@ Assert-Match -Text $uninstall -Pattern 'systemctl disable x-ui' -Message 'uninst
 Assert-Match -Text $uninstall -Pattern 'rm -rf /usr/local/x-ui /etc/x-ui' -Message 'uninstall.sh must remove legacy x-ui files during cleanup.'
 Assert-Match -Text $uninstall -Pattern '/swapfile none swap sw 0 0 # 3x-awg-adg-bundle' -Message 'uninstall.sh must remove the managed swapfile entry from /etc/fstab.'
 Assert-Match -Text $uninstall -Pattern '</dev/tty' -Message 'uninstall.sh must read confirmation from /dev/tty so curl|bash does not corrupt the script stream.'
+
+Assert-Contains -Text $buildSetup -Needle '00-bootstrap.sh' -Message 'build-setup.ps1 must assemble the bootstrap module first.'
+Assert-Contains -Text $buildSetup -Needle '10-helpers.sh' -Message 'build-setup.ps1 must assemble the shared helper module.'
+Assert-Contains -Text $buildSetup -Needle '20-system.sh' -Message 'build-setup.ps1 must assemble the base system module.'
+Assert-Contains -Text $buildSetup -Needle '30-xray.sh' -Message 'build-setup.ps1 must assemble the Xray orchestration module.'
+Assert-Contains -Text $buildSetup -Needle '40-awg.sh' -Message 'build-setup.ps1 must assemble the AmneziaWG module.'
+Assert-Contains -Text $buildSetup -Needle '50-adguard.sh' -Message 'build-setup.ps1 must assemble the AdGuardHome module.'
+Assert-Contains -Text $buildSetup -Needle '60-firewall.sh' -Message 'build-setup.ps1 must assemble the firewall module.'
+Assert-Contains -Text $buildSetup -Needle '70-output.sh' -Message 'build-setup.ps1 must assemble the final output module.'
+Assert-Contains -Text $setupIndex -Needle '00-bootstrap.sh' -Message 'src/setup/README.md must describe the module order.'
+Assert-Contains -Text $setupIndex -Needle '70-output.sh' -Message 'src/setup/README.md must describe the terminal output module.'
 
 Write-Host 'script-regressions: OK'

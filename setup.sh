@@ -1,6 +1,15 @@
 #!/bin/bash
-# Name: vps-vpn-triad (Xray Reality + AWG + AdGuard)
-# Description: Configures OS networking, pinned Xray Reality 25.1.30, optional Reality cascade routing, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
+# Name: vps-vpn-triad (assembled source bootstrap)
+# Description: Bootstrap layer for the modular Xray Reality + AmneziaWG + AdGuardHome installer.
+# Assembled from source modules:
+#   - src/setup/00-bootstrap.sh
+#   - src/setup/10-helpers.sh
+#   - src/setup/20-system.sh
+#   - src/setup/30-xray.sh
+#   - src/setup/40-awg.sh
+#   - src/setup/50-adguard.sh
+#   - src/setup/60-firewall.sh
+#   - src/setup/70-output.sh
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate] [--cascade-vless 'vless://...'] [--cascade-mode auto]
 # Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, can route non-RU AWG traffic through an upstream Reality exit, and proxies AdGuardHome DNS upstreams through local Xray.
 # Returns: Complete VPN and DNS server proxy routing.
@@ -14,7 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.1.2"
+SCRIPT_VERSION="2.1.3"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -78,6 +87,22 @@ err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
 
 log "Версия скрипта: ${SCRIPT_VERSION}"
 
+trap 'warn "Скрипт прерван! Проверьте состояние вручную. Лог: $LOG_FILE"' ERR INT TERM
+
+if [ "$EUID" -ne 0 ]; then
+  err "Запустите скрипт от имени root (sudo -i)"
+fi
+
+# Проверяем, запускался ли скрипт уже сегодня (для пропуска apt-операций)
+TODAY=$(date +%Y-%m-%d)
+LAST_RUN=$(cat "$LAST_RUN_FILE" 2>/dev/null || echo "")
+if [ "$LAST_RUN" = "$TODAY" ]; then
+    SKIP_APT=1
+    warn "Скрипт уже запускался сегодня ($TODAY). Пропускаем обновление OS (только перегенерация настроек)."
+else
+    SKIP_APT=0
+fi
+
 install_xray_core() {
     local current_xray_version=""
 
@@ -136,21 +161,14 @@ read_url_port() {
     trim_cr_value "$raw"
 }
 
-# Парсит вывод xray x25519 в переменные XRAY_PRIVATE_KEY и XRAY_PUBLIC_KEY.
-# Поддерживает старый формат ("Private key:"/"Public key:") и
-# новый формат xray >= v26.3 ("PrivateKey:"/"Password (PublicKey):").
 _parse_x25519_output() {
     local raw
-    # Нормализуем CRLF до парсинга (защита от Windows-переносов строк)
     raw=$(printf '%s' "$1" | tr -d '\r')
     local priv pub
-    # Новый формат (v26.3+): "PrivateKey: <val>" / "Password (PublicKey): <val>"
-    # Используем '|' как разделитель sed, чтобы '/' в классе символов не ломал паттерн
     priv=$(printf '%s\n' "$raw" | sed -nE 's|^PrivateKey:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
-    pub=$(printf '%s\n'  "$raw" | sed -nE 's|^Password \(PublicKey\):[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
-    # Старый формат (до v26.3): "Private key: <val>" / "Public key: <val>"
+    pub=$(printf '%s\n' "$raw" | sed -nE 's|^Password \(PublicKey\):[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
     [ -n "$priv" ] || priv=$(printf '%s\n' "$raw" | sed -nE 's|^Private key:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
-    [ -n "$pub"  ] || pub=$(printf '%s\n'  "$raw" | sed -nE 's|^Public key:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p'  | head -n1)
+    [ -n "$pub" ] || pub=$(printf '%s\n' "$raw" | sed -nE 's|^Public key:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
     printf '%s\n%s' "$priv" "$pub"
 }
 
@@ -160,7 +178,7 @@ generate_reality_keys() {
     raw_output="$("$XRAY_BIN" x25519 2>&1 || true)"
     priv_pub=$(_parse_x25519_output "$raw_output")
     XRAY_PRIVATE_KEY=$(printf '%s\n' "$priv_pub" | sed -n '1p')
-    XRAY_PUBLIC_KEY=$(printf '%s\n'  "$priv_pub" | sed -n '2p')
+    XRAY_PUBLIC_KEY=$(printf '%s\n' "$priv_pub" | sed -n '2p')
 
     if [ -n "$XRAY_PRIVATE_KEY" ] && [ -n "$XRAY_PUBLIC_KEY" ]; then
         return 0
@@ -629,8 +647,7 @@ validate_stack() {
     iptables -C INPUT -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT \
         || err "Нет INPUT-исключения для marked TProxy-пакетов awg0: UFW может дропать AWG интернет-трафик."
 }
-# Удаляет устаревшие статические правила iptables DNAT для DNS-порта 53 на awg0,
-# которые могли остаться от предыдущих версий скрипта (до переноса правил в PostUp/PostDown).
+
 cleanup_legacy_awg_dns_redirects() {
     iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
     iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
@@ -670,27 +687,11 @@ ensure_swapfile() {
     log "Swapfile активирован: ${swapfile}"
 }
 
-# Проверяем, запускался ли скрипт уже сегодня (для пропуска apt-операций)
-TODAY=$(date +%Y-%m-%d)
-LAST_RUN=$(cat "$LAST_RUN_FILE" 2>/dev/null || echo "")
-if [ "$LAST_RUN" = "$TODAY" ]; then
-    SKIP_APT=1
-    warn "Скрипт уже запускался сегодня ($TODAY). Пропускаем обновление OS (только перегенерация настроек)."
-else
-    SKIP_APT=0
-fi
-
-trap 'warn "Скрипт прерван! Проверьте состояние вручную. Лог: $LOG_FILE"' ERR INT TERM
-
-if [ "$EUID" -ne 0 ]; then
-  err "Запустите скрипт от имени root (sudo -i)"
-fi
-
+# ==============================================================================
+# 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
 # ==============================================================================
 ensure_swapfile
 
-# 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
-# ==============================================================================
 if [ "$SKIP_APT" -eq 0 ]; then
     log "Очистка устаревших репозиториев (удаление bullseye-backports)..."
     sed -i '/bullseye-backports/d' /etc/apt/sources.list
@@ -1177,6 +1178,7 @@ systemctl restart fail2ban
 
 validate_stack "${AGH_SVC_NAME}"
 
+# ==============================================================================
 # 8. ОЧИСТКА И УДАЛЕНИЕ ИНСТРУМЕНТОВ СБОРКИ
 # ==============================================================================
 log "Удаление инструментов сборки (Hardening) и очистка кэша..."
