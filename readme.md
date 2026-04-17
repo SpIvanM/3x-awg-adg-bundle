@@ -22,6 +22,7 @@ The installer configures Xray directly. Panel-based management is not part of th
 - AmneziaWG для VPN-доступа.
 - Xray Reality на `443`.
 - AdGuardHome для DNS-фильтрации и SafeSearch.
+- Опциональный каскад через внешний `VLESS Reality` upstream для non-RU AWG-трафика.
 
 ### Топология
 
@@ -53,8 +54,8 @@ graph TD
 - Пишет конфиг в `/usr/local/etc/xray/config.json`.
 - Удаляет legacy `x-ui`, если он остался от предыдущих версий, чтобы не было split-brain control plane.
 - Поднимает `VLESS + Reality + Vision` inbound на `443`.
-- Разделяет TProxy-настройку Xray на отдельные TCP- и UDP-inbound'ы на одном порту, чтобы не держать смешанный `tcp,udp` listener.
-- Генерирует TProxy inbound'ы только с `sockopt.tproxy = "tproxy"` и не ставит `sockopt.mark = 1`, чтобы не провоцировать локальную TCP-петлю через policy routing.
+- Держит единый `tproxy-in` inbound Xray c `network = "tcp,udp"` и `sockopt.tproxy = "tproxy"` без `sockopt.mark = 1`.
+- Опционально включает cascade mode через `--cascade-vless`, где non-RU AWG-трафик идёт через внешний `VLESS Reality` upstream, RU-домены и RU-IP остаются на локальном выходе, а при падении upstream Xray автоматически уходит в `direct-out`.
 - Генерирует и печатает `vless://` ссылку.
 - Настраивает AmneziaWG, TProxy, DNS DNAT и AdGuardHome.
 - Добавляет явное INPUT-исключение для `awg0` marked TProxy-трафика, чтобы `UFW` не дропал VPN-клиентский интернет в `ufw-not-local`.
@@ -67,6 +68,16 @@ graph TD
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
+### Установка с каскадом
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | \
+  sudo bash -s -- --cascade-vless 'vless://UUID@host:443?type=tcp&security=reality&encryption=none&pbk=...&sni=...&sid=...'
+```
+
+- В `v1` принимается только `vless://` c `type=tcp`, `security=reality`, `encryption=none`.
+- `--cascade-mode auto` можно передать явно, но это единственный поддерживаемый режим и он же включается по умолчанию вместе с `--cascade-vless`.
+
 ### Повторный запуск с ротацией
 
 ```bash
@@ -75,6 +86,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 
 - Повторный запуск без `--rotate` должен переиспользовать текущие credentials `Xray`, `AdGuardHome` и `AmneziaWG`, а не пересоздавать клиентский AWG-профиль.
 - При повторном запуске сохранённые credentials и восстановленные значения из существующих конфигов нормализуются от `CRLF`, чтобы Windows-переносы строк не попадали внутрь `Xray` JSON и `AWG`/`AGH` runtime-конфигов.
+- Если повторный запуск делается без `--cascade-vless`, скрипт возвращает dataplane в `direct-exit` режим и переписывает `CASCADE_*` поля в credentials.
 
 ### Удаление
 
@@ -97,6 +109,7 @@ This repo turns a clean VPS into a three-part stack:
 - AmneziaWG for VPN access.
 - Xray Reality on port `443`.
 - AdGuardHome for DNS filtering and SafeSearch.
+- An optional `VLESS Reality` cascade upstream for non-RU AWG traffic.
 
 ### Topology
 
@@ -128,8 +141,8 @@ graph TD
 - Writes the config to `/usr/local/etc/xray/config.json`.
 - Removes legacy `x-ui` leftovers on re-runs so the host keeps a single Xray control plane.
 - Creates a `VLESS + Reality + Vision` inbound on port `443`.
-- Splits Xray TProxy handling into dedicated TCP and UDP inbounds on the same port instead of a mixed `tcp,udp` listener.
-- Builds the TProxy inbounds with `sockopt.tproxy = "tproxy"` only and avoids `sockopt.mark = 1`, so transparent TCP does not collapse into a local policy-routing loop.
+- Keeps a single Xray `tproxy-in` inbound with `network = "tcp,udp"` and `sockopt.tproxy = "tproxy"` only.
+- Optionally enables cascade mode through `--cascade-vless`, where non-RU AWG traffic uses an upstream `VLESS Reality` exit, RU domains and RU IPs stay local, and Xray falls back to `direct-out` when the upstream is unhealthy.
 - Prints a `vless://` link.
 - Sets up AmneziaWG, TProxy, DNS DNAT, and AdGuardHome.
 - Adds an explicit INPUT allow rule for `awg0` TProxy-marked packets so `UFW` does not drop VPN internet traffic in `ufw-not-local`.
@@ -142,6 +155,16 @@ graph TD
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
+### Install with cascade
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | \
+  sudo bash -s -- --cascade-vless 'vless://UUID@host:443?type=tcp&security=reality&encryption=none&pbk=...&sni=...&sid=...'
+```
+
+- `v1` only accepts `vless://` links with `type=tcp`, `security=reality`, and `encryption=none`.
+- `--cascade-mode auto` is the only supported mode and is implied when `--cascade-vless` is present.
+
 ### Re-run with rotation
 
 ```bash
@@ -149,6 +172,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```
 
 - A re-run without `--rotate` is expected to reuse the current `Xray`, `AdGuardHome`, and `AmneziaWG` credentials instead of replacing the active AWG client profile.
+- A re-run without `--cascade-vless` returns the dataplane to `direct-exit` mode and rewrites the persisted `CASCADE_*` values.
 
 ### Uninstall
 

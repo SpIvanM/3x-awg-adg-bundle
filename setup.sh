@@ -1,8 +1,8 @@
 #!/bin/bash
 # Name: vps-vpn-triad (Xray Reality + AWG + AdGuard)
-# Description: Configures OS networking, pinned Xray Reality 25.1.30, split TCP/UDP TProxy handling without inbound socket marks, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
-# Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate]
-# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard. Use -r to rotate credentials.
+# Description: Configures OS networking, pinned Xray Reality 25.1.30, optional Reality cascade failover, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
+# Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate] [--cascade-vless 'vless://...'] [--cascade-mode auto]
+# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, and can route non-RU AWG traffic through a Reality upstream cascade.
 # Returns: Complete VPN and DNS server proxy routing.
 # Fails: If run without root privileges.
 # ==============================================================================
@@ -14,18 +14,52 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
+CASCADE_VLESS_ARG=""
+CASCADE_MODE_ARG=""
+CASCADE_ENABLED=0
+CASCADE_MODE=""
+CASCADE_VLESS=""
+CASCADE_ADDRESS=""
+CASCADE_PORT=""
+CASCADE_UUID=""
+CASCADE_FLOW=""
+CASCADE_PBK=""
+CASCADE_SNI=""
+CASCADE_SID=""
+CASCADE_FP=""
+CASCADE_SPX=""
+FINAL_MODE="direct"
 
 # Обработка аргументов
 ROTATE_CREDS=0
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --rotate|-r) ROTATE_CREDS=1; shift ;;
-        *) shift ;;
+        --cascade-vless)
+            if [ -z "${2:-}" ]; then
+                echo "[ERROR] Аргумент --cascade-vless требует значение вида vless://..." >&2
+                exit 1
+            fi
+            CASCADE_VLESS_ARG="$2"
+            shift 2
+            ;;
+        --cascade-mode)
+            if [ -z "${2:-}" ]; then
+                echo "[ERROR] Аргумент --cascade-mode требует значение. В v1 поддерживается только auto." >&2
+                exit 1
+            fi
+            CASCADE_MODE_ARG="$2"
+            shift 2
+            ;;
+        *)
+            echo "[ERROR] Неизвестный аргумент: $1" >&2
+            exit 1
+            ;;
     esac
 done
 
@@ -151,179 +185,369 @@ remove_legacy_xui() {
     systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
+reset_cascade_state() {
+    CASCADE_ENABLED=0
+    CASCADE_MODE=""
+    CASCADE_VLESS=""
+    CASCADE_ADDRESS=""
+    CASCADE_PORT=""
+    CASCADE_UUID=""
+    CASCADE_FLOW=""
+    CASCADE_PBK=""
+    CASCADE_SNI=""
+    CASCADE_SID=""
+    CASCADE_FP=""
+    CASCADE_SPX=""
+    FINAL_MODE="direct"
+}
+
+parse_cascade_vless_uri() {
+    local parser_output parser_status
+
+    [ -n "$CASCADE_VLESS" ] || err "Пустой --cascade-vless. Передайте полный vless:// URI."
+
+    set +e
+    parser_output=$(
+        CASCADE_VLESS_INPUT="$CASCADE_VLESS" python3 - <<'PY' 2>&1
+from urllib.parse import parse_qs, unquote, urlparse
+import os
+
+uri = os.environ.get("CASCADE_VLESS_INPUT", "").strip()
+if not uri:
+    raise SystemExit("Missing cascade VLESS URI.")
+
+try:
+    u = urlparse(uri)
+except ValueError as exc:
+    raise SystemExit(f"Invalid VLESS URI: {exc}")
+
+if u.scheme != "vless":
+    raise SystemExit("Unsupported scheme: expected vless")
+
+uuid = unquote(u.username or "")
+host = u.hostname or ""
+if not uuid:
+    raise SystemExit("Missing VLESS user UUID.")
+if not host:
+    raise SystemExit("Missing VLESS upstream host.")
+
+try:
+    port = u.port or 443
+except ValueError as exc:
+    raise SystemExit(f"Invalid VLESS port: {exc}")
+
+q = {k: v[-1] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
+required = ["security", "type", "encryption", "pbk", "sni", "sid"]
+for key in required:
+    if key not in q or not q[key]:
+        raise SystemExit(f"Missing required VLESS query field: {key}")
+
+if q.get("security") != "reality":
+    raise SystemExit("Only security=reality is supported in v1")
+if q.get("type") != "tcp":
+    raise SystemExit("Only type=tcp is supported in v1")
+if q.get("encryption") != "none":
+    raise SystemExit("Only encryption=none is supported in v1")
+
+flow = q.get("flow", "xtls-rprx-vision") or "xtls-rprx-vision"
+fp = q.get("fp", "chrome") or "chrome"
+spx = unquote(q.get("spx", "/") or "/")
+
+print(host)
+print(port)
+print(uuid)
+print(flow)
+print(q["pbk"])
+print(q["sni"])
+print(q["sid"])
+print(fp)
+print(spx)
+PY
+    )
+    parser_status=$?
+    set -e
+
+    [ "$parser_status" -eq 0 ] || err "Не удалось разобрать --cascade-vless: $parser_output"
+
+    CASCADE_ADDRESS=$(printf '%s\n' "$parser_output" | sed -n '1p')
+    CASCADE_PORT=$(printf '%s\n' "$parser_output" | sed -n '2p')
+    CASCADE_UUID=$(printf '%s\n' "$parser_output" | sed -n '3p')
+    CASCADE_FLOW=$(printf '%s\n' "$parser_output" | sed -n '4p')
+    CASCADE_PBK=$(printf '%s\n' "$parser_output" | sed -n '5p')
+    CASCADE_SNI=$(printf '%s\n' "$parser_output" | sed -n '6p')
+    CASCADE_SID=$(printf '%s\n' "$parser_output" | sed -n '7p')
+    CASCADE_FP=$(printf '%s\n' "$parser_output" | sed -n '8p')
+    CASCADE_SPX=$(printf '%s\n' "$parser_output" | sed -n '9p')
+
+    [ -n "$CASCADE_ADDRESS" ] || err "Cascade parser returned an empty host."
+    [ -n "$CASCADE_PORT" ] || err "Cascade parser returned an empty port."
+    [ -n "$CASCADE_UUID" ] || err "Cascade parser returned an empty UUID."
+    [ -n "$CASCADE_PBK" ] || err "Cascade parser returned an empty Reality public key."
+    [ -n "$CASCADE_SNI" ] || err "Cascade parser returned an empty SNI."
+    [ -n "$CASCADE_SID" ] || err "Cascade parser returned an empty shortId."
+}
+
+configure_cascade_mode() {
+    if [ -n "$CASCADE_MODE_ARG" ] && [ "$CASCADE_MODE_ARG" != "auto" ]; then
+        err "Only --cascade-mode auto is supported in v1."
+    fi
+
+    reset_cascade_state
+
+    if [ -n "$CASCADE_VLESS_ARG" ]; then
+        CASCADE_VLESS="$CASCADE_VLESS_ARG"
+        CASCADE_MODE="${CASCADE_MODE_ARG:-auto}"
+        parse_cascade_vless_uri
+        CASCADE_ENABLED=1
+        FINAL_MODE="cascade-auto"
+        return 0
+    fi
+
+    [ -z "$CASCADE_MODE_ARG" ] || err "--cascade-mode requires --cascade-vless."
+}
+
 write_xray_config() {
     mkdir -p /usr/local/etc/xray
 
-    cat <<EOF > /usr/local/etc/xray/config.json
-{
-  "log": {
-    "access": "none",
-    "dnsLog": false,
-    "error": "",
-    "loglevel": "warning",
-    "maskAddress": ""
-  },
-  "dns": {
-    "servers": [
-      "udp://127.0.0.1:${ADG_DNS_PORT}"
-    ],
-    "queryStrategy": "UseIPv4"
-  },
-  "inbounds": [
-    {
-      "listen": "0.0.0.0",
-      "port": ${XRAY_PORT},
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "email": "reality-default",
-            "flow": "xtls-rprx-vision",
-            "id": "${XRAY_UUID}"
-          }
-        ],
-        "decryption": "none"
-      },
-      "sniffing": {
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ],
-        "enabled": true,
-        "metadataOnly": true,
-        "routeOnly": true
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "dest": "google.com:443",
-          "privateKey": "${XRAY_PRIVATE_KEY}",
-          "serverNames": [
-            "google.com",
-            "www.google.com"
-          ],
-          "shortIds": [
-            "${XRAY_SHORT_ID}"
-          ],
-          "show": false,
-          "xver": 0
+    SERVER_IP="$SERVER_IP" \
+    XRAY_PORT="$XRAY_PORT" \
+    XRAY_UUID="$XRAY_UUID" \
+    XRAY_PRIVATE_KEY="$XRAY_PRIVATE_KEY" \
+    XRAY_SHORT_ID="$XRAY_SHORT_ID" \
+    T_PORT="$T_PORT" \
+    ADG_DNS_PORT="$ADG_DNS_PORT" \
+    CASCADE_ENABLED="$CASCADE_ENABLED" \
+    CASCADE_ADDRESS="$CASCADE_ADDRESS" \
+    CASCADE_PORT="$CASCADE_PORT" \
+    CASCADE_UUID="$CASCADE_UUID" \
+    CASCADE_FLOW="$CASCADE_FLOW" \
+    CASCADE_PBK="$CASCADE_PBK" \
+    CASCADE_SNI="$CASCADE_SNI" \
+    CASCADE_SID="$CASCADE_SID" \
+    CASCADE_FP="$CASCADE_FP" \
+    CASCADE_SPX="$CASCADE_SPX" \
+    python3 - <<'PY' > /usr/local/etc/xray/config.json
+import json
+import os
+import sys
+
+server_ip = os.environ["SERVER_IP"]
+cascade_enabled = os.environ.get("CASCADE_ENABLED", "0") == "1"
+
+direct_outbound = {
+    "tag": "direct-out",
+    "protocol": "freedom",
+    "settings": {
+        "domainStrategy": "UseIPv4",
+    },
+    "streamSettings": {
+        "sockopt": {
+            "mark": 2,
         },
-        "tcpSettings": {
-          "header": {
-            "type": "none"
-          }
-        }
-      },
-      "tag": "inbound-443"
     },
-    {
-      "listen": "0.0.0.0",
-      "port": ${T_PORT},
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "127.0.0.1",
-        "followRedirect": true,
-        "network": "tcp"
-      },
-      "sniffing": {
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ],
-        "enabled": true,
-        "metadataOnly": true,
-        "routeOnly": true
-      },
-      "streamSettings": {
-        "sockopt": {
-          "tproxy": "tproxy"
-        }
-      },
-      "tag": "tproxy-tcp"
-    },
-    {
-      "listen": "0.0.0.0",
-      "port": ${T_PORT},
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "127.0.0.1",
-        "followRedirect": true,
-        "network": "udp"
-      },
-      "sniffing": {
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ],
-        "enabled": true,
-        "metadataOnly": true,
-        "routeOnly": true
-      },
-      "streamSettings": {
-        "sockopt": {
-          "tproxy": "tproxy"
-        }
-      },
-      "tag": "tproxy-udp"
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {
-        "domainStrategy": "AsIs"
-      },
-      "tag": "direct"
-    },
-    {
-      "protocol": "blackhole",
-      "settings": {},
-      "tag": "blocked"
-    }
-  ],
-  "routing": {
-    "domainStrategy": "AsIs",
-    "rules": [
-      {
-        "type": "field",
-        "inboundTag": [
-          "tproxy-tcp",
-          "tproxy-udp"
-        ],
-        "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "inbound-443"
-        ],
-        "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "outboundTag": "blocked",
-        "ip": [
-          "geoip:private"
-        ]
-      },
-      {
-        "type": "field",
-        "outboundTag": "blocked",
-        "protocol": [
-          "bittorrent"
-        ]
-      }
-    ]
-  }
 }
-EOF
+
+block_outbound = {
+    "tag": "block-out",
+    "protocol": "blackhole",
+}
+
+vpn_default_rule = {
+    "type": "field",
+    "ruleTag": "vpn-default",
+    "inboundTag": ["tproxy-in"],
+    "outboundTag": "direct-out",
+}
+
+config = {
+    "log": {
+        "access": "none",
+        "dnsLog": False,
+        "error": "",
+        "loglevel": "warning",
+        "maskAddress": "",
+    },
+    "dns": {
+        "servers": [
+            f"udp://127.0.0.1:{os.environ['ADG_DNS_PORT']}",
+        ],
+        "queryStrategy": "UseIPv4",
+    },
+    "inbounds": [
+        {
+            "tag": "reality-in",
+            "listen": "0.0.0.0",
+            "port": int(os.environ["XRAY_PORT"]),
+            "protocol": "vless",
+            "settings": {
+                "clients": [
+                    {
+                        "email": "reality-default",
+                        "flow": "xtls-rprx-vision",
+                        "id": os.environ["XRAY_UUID"],
+                    }
+                ],
+                "decryption": "none",
+            },
+            "sniffing": {
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic", "fakedns"],
+                "metadataOnly": True,
+                "routeOnly": True,
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "dest": "google.com:443",
+                    "privateKey": os.environ["XRAY_PRIVATE_KEY"],
+                    "serverNames": ["google.com", "www.google.com"],
+                    "shortIds": [os.environ["XRAY_SHORT_ID"]],
+                    "show": False,
+                    "xver": 0,
+                },
+                "tcpSettings": {
+                    "header": {
+                        "type": "none",
+                    },
+                },
+            },
+        },
+        {
+            "tag": "tproxy-in",
+            "listen": "0.0.0.0",
+            "port": int(os.environ["T_PORT"]),
+            "protocol": "dokodemo-door",
+            "settings": {
+                "network": "tcp,udp",
+                "followRedirect": True,
+            },
+            "sniffing": {
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic"],
+                "routeOnly": True,
+            },
+            "streamSettings": {
+                "sockopt": {
+                    "tproxy": "tproxy",
+                },
+            },
+        },
+    ],
+    "outbounds": [
+        direct_outbound,
+        block_outbound,
+    ],
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+            {
+                "type": "field",
+                "ruleTag": "ru-domains",
+                "domain": [
+                    "regexp:\\\\.ru$",
+                    "regexp:\\\\.su$",
+                    "regexp:\\\\.xn--p1ai$",
+                ],
+                "outboundTag": "direct-out",
+            },
+            {
+                "type": "field",
+                "ruleTag": "ru-ips",
+                "ip": [
+                    "geoip:ru",
+                    "geoip:private",
+                ],
+                "outboundTag": "direct-out",
+            },
+            {
+                "type": "field",
+                "ruleTag": "entry-server-self",
+                "ip": [
+                    "127.0.0.0/8",
+                    "10.0.0.0/8",
+                    "100.64.0.0/10",
+                    "169.254.0.0/16",
+                    "172.16.0.0/12",
+                    "192.168.0.0/16",
+                    f"{server_ip}/32",
+                ],
+                "outboundTag": "direct-out",
+            },
+            {
+                "type": "field",
+                "ruleTag": "reality-server-egress",
+                "inboundTag": ["reality-in"],
+                "outboundTag": "direct-out",
+            },
+            {
+                "type": "field",
+                "ruleTag": "block-bittorrent",
+                "protocol": ["bittorrent"],
+                "outboundTag": "block-out",
+            },
+            vpn_default_rule,
+        ],
+    },
+}
+
+if cascade_enabled:
+    exit_us_outbound = {
+        "tag": "exit-us",
+        "protocol": "vless",
+        "settings": {
+            "vnext": [
+                {
+                    "address": os.environ["CASCADE_ADDRESS"],
+                    "port": int(os.environ["CASCADE_PORT"]),
+                    "users": [
+                        {
+                            "id": os.environ["CASCADE_UUID"],
+                            "encryption": "none",
+                            "flow": os.environ["CASCADE_FLOW"],
+                        }
+                    ],
+                }
+            ]
+        },
+        "streamSettings": {
+            "network": "tcp",
+            "security": "reality",
+            "realitySettings": {
+                "serverName": os.environ["CASCADE_SNI"],
+                "publicKey": os.environ["CASCADE_PBK"],
+                "shortId": os.environ["CASCADE_SID"],
+                "fingerprint": os.environ["CASCADE_FP"],
+                "spiderX": os.environ["CASCADE_SPX"],
+            },
+            "sockopt": {
+                "mark": 2,
+            },
+        },
+    }
+    config["outbounds"].append(exit_us_outbound)
+    config["routing"]["balancers"] = [
+        {
+            "tag": "bridge-exit",
+            "selector": ["exit-"],
+            "fallbackTag": "direct-out",
+            "strategy": {
+                "type": "leastPing",
+            },
+        }
+    ]
+    vpn_default_rule.pop("outboundTag", None)
+    vpn_default_rule["balancerTag"] = "bridge-exit"
+    config["observatory"] = {
+        "subjectSelector": ["exit-"],
+        "probeUrl": "https://connectivitycheck.gstatic.com/generate_204",
+        "probeInterval": "30s",
+        "enableConcurrency": False,
+    }
+
+json.dump(config, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PY
 }
 
 cleanup_legacy_adguard_units() {
@@ -472,14 +696,15 @@ if [ "$SKIP_APT" -eq 0 ]; then
     apt update && apt upgrade -y
     # Базовые пакеты и точные headers текущего ядра для детерминированной сборки AWG.
     apt install -y curl wget mc ufw fail2ban nano iptables iptables-persistent \
-                   jq openssl whois qrencode dnsutils "linux-headers-$(uname -r)" \
+                   jq openssl whois qrencode dnsutils python3 "linux-headers-$(uname -r)" \
         || err "Не удалось установить обязательные пакеты и точные kernel headers для $(uname -r)."
     # Обновляем дату последнего полного запуска
     date +%Y-%m-%d > "$LAST_RUN_FILE"
 else
-    log "Пропуск apt-операций (fast mode). Убеждаемся в наличии jq, openssl и dig..."
+    log "Пропуск apt-операций (fast mode). Убеждаемся в наличии jq, openssl, python3 и dig..."
     command -v jq >/dev/null 2>&1 || apt install -y jq
     command -v openssl >/dev/null 2>&1 || apt install -y openssl
+    command -v python3 >/dev/null 2>&1 || apt install -y python3
     command -v dig >/dev/null 2>&1 || apt install -y dnsutils
 fi
 
@@ -537,6 +762,19 @@ if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
     XRAY_PUBLIC_KEY=$(read_cred_value "XRAY_PUBLIC_KEY" "$CREDS_FILE")
     XRAY_SHORT_ID=$(read_cred_value "XRAY_SHORT_ID" "$CREDS_FILE")
     ADG_DNS_PORT=$(read_cred_value "ADG_DNS_PORT" "$CREDS_FILE")
+    CASCADE_ENABLED=$(read_cred_value "CASCADE_ENABLED" "$CREDS_FILE")
+    CASCADE_MODE=$(read_cred_value "CASCADE_MODE" "$CREDS_FILE")
+    CASCADE_VLESS=$(read_cred_value "CASCADE_VLESS" "$CREDS_FILE")
+    CASCADE_ADDRESS=$(read_cred_value "CASCADE_ADDRESS" "$CREDS_FILE")
+    CASCADE_PORT=$(read_cred_value "CASCADE_PORT" "$CREDS_FILE")
+    CASCADE_UUID=$(read_cred_value "CASCADE_UUID" "$CREDS_FILE")
+    CASCADE_FLOW=$(read_cred_value "CASCADE_FLOW" "$CREDS_FILE")
+    CASCADE_PBK=$(read_cred_value "CASCADE_PBK" "$CREDS_FILE")
+    CASCADE_SNI=$(read_cred_value "CASCADE_SNI" "$CREDS_FILE")
+    CASCADE_SID=$(read_cred_value "CASCADE_SID" "$CREDS_FILE")
+    CASCADE_FP=$(read_cred_value "CASCADE_FP" "$CREDS_FILE")
+    CASCADE_SPX=$(read_cred_value "CASCADE_SPX" "$CREDS_FILE")
+    FINAL_MODE=$(read_cred_value "FINAL_MODE" "$CREDS_FILE")
 fi
 
 # Если после загрузки переменные пустые, генерируем заново
@@ -578,6 +816,13 @@ fi
 # ==============================================================================
 log "Удаление legacy x-ui, если он остался от предыдущих версий..."
 remove_legacy_xui
+configure_cascade_mode
+
+if [ "$CASCADE_ENABLED" -eq 1 ]; then
+    log "Cascade mode включён: non-RU AWG трафик пойдёт через upstream Reality, fallback = direct-out."
+else
+    log "Cascade mode выключен: система работает в direct-exit режиме."
+fi
 
 VLESS_LINK="vless://$XRAY_UUID@$SERVER_IP:$XRAY_PORT?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&pbk=$XRAY_PUBLIC_KEY&headerType=none&fp=chrome&spx=%2F&sni=google.com&sid=$XRAY_SHORT_ID#VLESS-Reality-Default"
 
@@ -668,13 +913,14 @@ PostUp = iptables -t mangle -F AWG_TPROXY
 PostUp = iptables -t mangle -A AWG_TPROXY -d 0.0.0.0/8 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 10.0.0.0/8 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 100.64.0.0/10 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 127.0.0.0/8 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 169.254.0.0/16 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 172.16.0.0/12 -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 192.168.0.0/16 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 192.168.0.0/16 -p tcp ! --dport 53 -j RETURN
+PostUp = iptables -t mangle -A AWG_TPROXY -d 192.168.0.0/16 -p udp ! --dport 53 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 224.0.0.0/4 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d 240.0.0.0/4 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -d $SERVER_IP -j RETURN
-PostUp = iptables -t mangle -A AWG_TPROXY -d 127.0.0.0/8 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -p udp --dport 53 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -p tcp --dport 53 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
@@ -953,6 +1199,19 @@ XRAY_PRIVATE_KEY=${XRAY_PRIVATE_KEY}
 XRAY_PUBLIC_KEY=${XRAY_PUBLIC_KEY}
 XRAY_SHORT_ID=${XRAY_SHORT_ID}
 VLESS_LINK=${VLESS_LINK}
+CASCADE_ENABLED=${CASCADE_ENABLED}
+CASCADE_MODE=${CASCADE_MODE}
+CASCADE_VLESS=${CASCADE_VLESS}
+CASCADE_ADDRESS=${CASCADE_ADDRESS}
+CASCADE_PORT=${CASCADE_PORT}
+CASCADE_UUID=${CASCADE_UUID}
+CASCADE_FLOW=${CASCADE_FLOW}
+CASCADE_PBK=${CASCADE_PBK}
+CASCADE_SNI=${CASCADE_SNI}
+CASCADE_SID=${CASCADE_SID}
+CASCADE_FP=${CASCADE_FP}
+CASCADE_SPX=${CASCADE_SPX}
+FINAL_MODE=${FINAL_MODE}
 ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
 ADG_USER=${ADG_USER}
 ADG_PASS=${ADG_PASS}
@@ -984,6 +1243,7 @@ echo -e "\n${GREEN}Xray Reality:${RESET}"
 echo -e "Порт: ${YELLOW}443${RESET}"
 echo -e "Конфиг: ${YELLOW}/usr/local/etc/xray/config.json${RESET}"
 echo -e "Дефолтная ссылка VLESS (Reality): ${YELLOW}${VLESS_LINK}${RESET}"
+echo -e "Режим маршрутизации: ${YELLOW}${FINAL_MODE}${RESET}"
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
 echo -e "DNS реальный порт: ${YELLOW}${ADG_DNS_PORT}${RESET} (клиент видит 10.8.0.1:53 через DNAT)"
