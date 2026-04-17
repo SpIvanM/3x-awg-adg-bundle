@@ -19,7 +19,7 @@ Description: Индекс модулей для сборки setup.sh. Этот 
 ## Назначение модулей
 
 - `00-bootstrap.sh` - shebang, глобальные переменные, CLI, логирование, trap и базовые инварианты запуска.
-- `10-helpers.sh` - общие helper-функции для Xray, cascade, credentials, validation и cleanup.
+- `10-helpers.sh` - общие helper-функции для Xray, cascade, credentials, validation и cleanup, включая резолв upstream cascade в IP чтобы не ловить DNS-лупы.
 - `20-system.sh` - системная подготовка, `apt`, `sysctl`, swapfile, Xray bootstrap и загрузка credentials.
 - `30-xray.sh` - cleanup legacy `x-ui`, cascade mode и построение дефолтной ссылки `VLESS`.
 - `40-awg.sh` - установка и конфигурация AmneziaWG.

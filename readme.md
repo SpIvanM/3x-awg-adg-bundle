@@ -56,7 +56,7 @@ graph TD
 - Удаляет legacy `x-ui`, если он остался от предыдущих версий, чтобы не было split-brain control plane.
 - Поднимает `VLESS + Reality + Vision` inbound на `443`.
 - Держит единый `tproxy-in` inbound Xray c `network = "tcp,udp"` и `sockopt.tproxy = "tproxy"` без `sockopt.mark = 1`.
-- Опционально включает cascade mode через `--cascade-vless`, где non-RU AWG-трафик идёт через внешний `VLESS Reality` upstream, RU-домены и RU-IP остаются на локальном выходе.
+- Опционально включает cascade mode через `--cascade-vless`, где non-RU AWG-трафик идёт через внешний `VLESS Reality` upstream, RU-домены и RU-IP остаются на локальном выходе, а доменный upstream на этапе установки резолвится в IP, чтобы не ловить DNS-лупы.
 - Проксирует upstream DNS AdGuardHome через локальный Xray HTTP proxy и DoH.
 - Генерирует и печатает `vless://` ссылку.
 - Настраивает AmneziaWG, TProxy, DNS DNAT и AdGuardHome.
@@ -145,7 +145,7 @@ graph TD
 - Removes legacy `x-ui` leftovers on re-runs so the host keeps a single Xray control plane.
 - Creates a `VLESS + Reality + Vision` inbound on port `443`.
 - Keeps a single Xray `tproxy-in` inbound with `network = "tcp,udp"` and `sockopt.tproxy = "tproxy"` only.
-- Optionally enables cascade mode through `--cascade-vless`, where non-RU AWG traffic uses an upstream `VLESS Reality` exit, RU domains and RU IPs stay local.
+- Optionally enables cascade mode through `--cascade-vless`, where non-RU AWG traffic uses an upstream `VLESS Reality` exit, RU domains and RU IPs stay local, and a domain-based upstream is resolved to an IP during install to avoid DNS loops.
 - Proxies AdGuardHome upstream DNS through a local Xray HTTP proxy and DoH.
 - Prints a `vless://` link.
 - Sets up AmneziaWG, TProxy, DNS DNAT, and AdGuardHome.

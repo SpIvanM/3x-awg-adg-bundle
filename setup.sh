@@ -23,7 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.1.3"
+SCRIPT_VERSION="2.1.4"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -42,6 +42,7 @@ CASCADE_SNI=""
 CASCADE_SID=""
 CASCADE_FP=""
 CASCADE_SPX=""
+CASCADE_ADDRESS_IP=""
 FINAL_MODE="direct"
 
 # Обработка аргументов
@@ -210,6 +211,7 @@ reset_cascade_state() {
     CASCADE_MODE=""
     CASCADE_VLESS=""
     CASCADE_ADDRESS=""
+    CASCADE_ADDRESS_IP=""
     CASCADE_PORT=""
     CASCADE_UUID=""
     CASCADE_FLOW=""
@@ -307,6 +309,49 @@ PY
     [ -n "$CASCADE_SID" ] || err "Cascade parser returned an empty shortId."
 }
 
+resolve_cascade_upstream_address() {
+    local resolver_output resolver_status
+
+    [ -n "$CASCADE_ADDRESS" ] || err "Cascade parser returned an empty host."
+
+    set +e
+    resolver_output=$(
+        CASCADE_ADDRESS_INPUT="$CASCADE_ADDRESS" python3 - <<'PY' 2>&1
+from ipaddress import ip_address
+from socket import AF_INET, AF_INET6, getaddrinfo
+import os
+
+host = os.environ.get("CASCADE_ADDRESS_INPUT", "").strip()
+if not host:
+    raise SystemExit("Missing cascade upstream host.")
+
+try:
+    ip_address(host)
+except ValueError:
+    infos = getaddrinfo(host, None)
+    ipv4 = next((info[4][0] for info in infos if info[0] == AF_INET), "")
+    ipv6 = next((info[4][0] for info in infos if info[0] == AF_INET6), "")
+    resolved = ipv4 or ipv6
+    if not resolved:
+        raise SystemExit(f"Unable to resolve cascade upstream host: {host}")
+    print(resolved)
+else:
+    print(host)
+PY
+    )
+    resolver_status=$?
+    set -e
+
+    [ "$resolver_status" -eq 0 ] || err "Не удалось определить IP каскадного upstream: $resolver_output"
+
+    CASCADE_ADDRESS_IP=$(printf '%s\n' "$resolver_output" | sed -n '1p')
+    [ -n "$CASCADE_ADDRESS_IP" ] || err "Resolved cascade upstream IP is empty."
+
+    if [ "$CASCADE_ADDRESS" != "$CASCADE_ADDRESS_IP" ]; then
+        log "Cascade upstream ${CASCADE_ADDRESS} resolved to ${CASCADE_ADDRESS_IP} for outbound use."
+    fi
+}
+
 configure_cascade_mode() {
     if [ -n "$CASCADE_MODE_ARG" ] && [ "$CASCADE_MODE_ARG" != "auto" ]; then
         err "Only --cascade-mode auto is supported in v1."
@@ -318,6 +363,7 @@ configure_cascade_mode() {
         CASCADE_VLESS="$CASCADE_VLESS_ARG"
         CASCADE_MODE="${CASCADE_MODE_ARG:-auto}"
         parse_cascade_vless_uri
+        resolve_cascade_upstream_address
         CASCADE_ENABLED=1
         FINAL_MODE="cascade-auto"
         return 0
@@ -339,6 +385,7 @@ write_xray_config() {
     ADG_HTTP_PROXY_PORT="$ADG_HTTP_PROXY_PORT" \
     CASCADE_ENABLED="$CASCADE_ENABLED" \
     CASCADE_ADDRESS="$CASCADE_ADDRESS" \
+    CASCADE_ADDRESS_IP="$CASCADE_ADDRESS_IP" \
     CASCADE_PORT="$CASCADE_PORT" \
     CASCADE_UUID="$CASCADE_UUID" \
     CASCADE_FLOW="$CASCADE_FLOW" \
@@ -354,6 +401,7 @@ import sys
 
 server_ip = os.environ["SERVER_IP"]
 cascade_enabled = os.environ.get("CASCADE_ENABLED", "0") == "1"
+cascade_address_ip = os.environ.get("CASCADE_ADDRESS_IP") or os.environ["CASCADE_ADDRESS"]
 
 direct_outbound = {
     "tag": "direct-out",
@@ -482,9 +530,9 @@ config = {
                 "type": "field",
                 "ruleTag": "ru-domains",
                 "domain": [
-                    "regexp:\\\\.ru$",
-                    "regexp:\\\\.su$",
-                    "regexp:\\\\.xn--p1ai$",
+                    "regexp:\\.ru$",
+                    "regexp:\\.su$",
+                    "regexp:\\.xn--p1ai$",
                 ],
                 "outboundTag": "direct-out",
             },
@@ -536,7 +584,7 @@ if cascade_enabled:
         "settings": {
             "vnext": [
                 {
-                    "address": os.environ["CASCADE_ADDRESS"],
+                    "address": cascade_address_ip,
                     "port": int(os.environ["CASCADE_PORT"]),
                     "users": [
                         {
