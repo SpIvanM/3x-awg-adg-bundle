@@ -1,6 +1,6 @@
 <#
 Name: script regression checks
-Description: Validates that setup and uninstall scripts keep the Xray-only Reality setup, AdGuard DNS config, AWG routing, safe piped execution, and managed swapfile cleanup.
+Description: Validates that setup and uninstall scripts keep the Xray-only Reality setup, split TCP/UDP TProxy handling, AdGuard DNS config, AWG routing, safe piped execution, and managed swapfile cleanup.
 Usage: powershell -File .\script-regressions.ps1
 Behavior: Reads setup.sh and uninstall.sh and fails if required guardrails are absent or legacy 3x-ui plumbing remains.
 Returns: Exit code 0 on pass, non-zero on regression.
@@ -52,6 +52,8 @@ function Assert-Contains {
 }
 
 Assert-Match -Text $setup -Pattern 'install-release\.sh' -Message 'setup.sh must use the official Xray installer.'
+Assert-Match -Text $setup -Pattern 'XRAY_VERSION_PIN="25\.1\.30"' -Message 'setup.sh must pin the Xray version that currently avoids the transparent-listener regression.'
+Assert-Contains -Text $setup -Needle '@ install --version "$XRAY_VERSION_PIN"' -Message 'setup.sh must install Xray through the official installer with the pinned stable version.'
 Assert-Match -Text $setup -Pattern '/usr/local/etc/xray/config\.json' -Message 'setup.sh must write the Xray config to the official path.'
 Assert-Match -Text $setup -Pattern 'systemctl enable xray' -Message 'setup.sh must enable the Xray service.'
 Assert-Match -Text $setup -Pattern 'systemctl restart xray' -Message 'setup.sh must restart Xray after writing the config.'
@@ -64,6 +66,14 @@ Assert-Contains -Text $setup -Needle '"$XRAY_BIN" x25519 -i "$fallback_priv" 2>&
 Assert-NotMatch -Text $setup -Pattern "cut -d' ' -f3" -Message 'setup.sh must not parse Reality keys with fixed-space cut.'
 Assert-Match -Text $setup -Pattern 'realitySettings' -Message 'setup.sh must generate a Reality inbound in the Xray config.'
 Assert-Match -Text $setup -Pattern 'dokodemo-door' -Message 'setup.sh must configure a direct dokodemo-door TProxy inbound for AWG traffic.'
+Assert-Match -Text $setup -Pattern '"tag": "tproxy-tcp"' -Message 'setup.sh must split the TProxy inbound into a dedicated TCP listener.'
+Assert-Match -Text $setup -Pattern '"tag": "tproxy-udp"' -Message 'setup.sh must split the TProxy inbound into a dedicated UDP listener.'
+Assert-Match -Text $setup -Pattern '"network": "tcp"' -Message 'setup.sh must keep a TCP-only dokodemo-door TProxy inbound.'
+Assert-Match -Text $setup -Pattern '"network": "udp"' -Message 'setup.sh must keep a UDP-only dokodemo-door TProxy inbound.'
+Assert-NotMatch -Text $setup -Pattern '"network": "tcp,udp"' -Message 'setup.sh must not keep a combined tcp,udp TProxy inbound after the split.'
+Assert-Match -Text $setup -Pattern '"sockopt": \{\r?\n\s+"tproxy": "tproxy"\r?\n\s+\}' -Message 'setup.sh must keep the TProxy inbound sockopt minimal and only enable transparent proxy mode.'
+Assert-NotMatch -Text $setup -Pattern '"sockopt": \{\r?\n\s+"mark": 1,\r?\n\s+"tproxy": "tproxy"\r?\n\s+\}' -Message 'setup.sh must not set sockopt.mark=1 on TProxy inbounds because that can re-route transparent TCP into a local loop.'
+Assert-Match -Text $setup -Pattern '"inboundTag": \[\r?\n\s+"tproxy-tcp",\r?\n\s+"tproxy-udp"\r?\n\s+\]' -Message 'setup.sh must route both split TProxy inbounds to the same outbound policy.'
 Assert-Match -Text $setup -Pattern 'vless://' -Message 'setup.sh must still print a VLESS Reality link.'
 Assert-Match -Text $setup -Pattern 'flow=xtls-rprx-vision' -Message 'setup.sh must export a VLESS Reality link with the Vision flow.'
 Assert-Match -Text $setup -Pattern 'upstream_dns:\r?\n\s+- 1\.1\.1\.1\r?\n\s+- 8\.8\.8\.8' -Message 'setup.sh must use plain IP upstream DNS servers that current AdGuardHome accepts without bootstrap rewrites.'

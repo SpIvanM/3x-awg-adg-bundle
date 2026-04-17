@@ -1,8 +1,8 @@
 #!/bin/bash
 # Name: vps-vpn-triad (Xray Reality + AWG + AdGuard)
-# Description: Configures OS networking, Xray Reality, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
+# Description: Configures OS networking, pinned Xray Reality 25.1.30, split TCP/UDP TProxy handling without inbound socket marks, AmneziaWG and AdGuardHome on Debian 11 and Ubuntu.
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate]
-# Behavior: Updates sysctl, installs OS packages, installs Xray-core, compiles AmneziaWG kernel module, sets up AdGuard. Use -r to rotate credentials.
+# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard. Use -r to rotate credentials.
 # Returns: Complete VPN and DNS server proxy routing.
 # Fails: If run without root privileges.
 # ==============================================================================
@@ -15,6 +15,7 @@ export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
 SCRIPT_VERSION="2.0.0"
+XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
@@ -42,13 +43,24 @@ warn() { echo -e "${YELLOW}[WARN] $1${RESET}"; }
 err() { echo -e "${RED}[ERROR] $1${RESET}"; exit 1; }
 
 install_xray_core() {
-    if command -v xray >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^xray\.service'; then
+    local current_xray_version=""
+
+    if command -v xray >/dev/null 2>&1; then
+        current_xray_version=$(xray version 2>/dev/null | awk 'NR==1 {print $2}')
+    fi
+
+    if [ "$current_xray_version" = "$XRAY_VERSION_PIN" ] && systemctl list-unit-files 2>/dev/null | grep -q '^xray\.service'; then
         systemctl enable xray >/dev/null 2>&1 || true
         return 0
     fi
 
-    log "Установка Xray-core через официальный инсталлятор..."
-    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+    if [ -n "$current_xray_version" ] && [ "$current_xray_version" != "$XRAY_VERSION_PIN" ]; then
+        warn "Обнаружен Xray ${current_xray_version}. Переключаемся на pinned-версию ${XRAY_VERSION_PIN} из-за регрессии TProxy/TCP в более новых релизах."
+    else
+        log "Установка Xray-core ${XRAY_VERSION_PIN} через официальный инсталлятор..."
+    fi
+
+    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version "$XRAY_VERSION_PIN"
     systemctl daemon-reload
     systemctl enable xray >/dev/null 2>&1 || true
 }
@@ -214,7 +226,7 @@ write_xray_config() {
       "settings": {
         "address": "127.0.0.1",
         "followRedirect": true,
-        "network": "tcp,udp"
+        "network": "tcp"
       },
       "sniffing": {
         "destOverride": [
@@ -229,11 +241,37 @@ write_xray_config() {
       },
       "streamSettings": {
         "sockopt": {
-          "mark": 1,
           "tproxy": "tproxy"
         }
       },
-      "tag": "tproxy-in"
+      "tag": "tproxy-tcp"
+    },
+    {
+      "listen": "0.0.0.0",
+      "port": ${T_PORT},
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1",
+        "followRedirect": true,
+        "network": "udp"
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ],
+        "enabled": true,
+        "metadataOnly": true,
+        "routeOnly": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      },
+      "tag": "tproxy-udp"
     }
   ],
   "outbounds": [
@@ -256,7 +294,8 @@ write_xray_config() {
       {
         "type": "field",
         "inboundTag": [
-          "tproxy-in"
+          "tproxy-tcp",
+          "tproxy-udp"
         ],
         "outboundTag": "direct"
       },

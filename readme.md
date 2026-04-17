@@ -49,10 +49,12 @@ graph TD
 
 ### Что делает `setup.sh`
 
-- Устанавливает Xray-core через официальный installer.
+- Устанавливает `Xray-core 25.1.30` через официальный installer и не откатывается обратно на `latest` при повторном запуске.
 - Пишет конфиг в `/usr/local/etc/xray/config.json`.
 - Удаляет legacy `x-ui`, если он остался от предыдущих версий, чтобы не было split-brain control plane.
 - Поднимает `VLESS + Reality + Vision` inbound на `443`.
+- Разделяет TProxy-настройку Xray на отдельные TCP- и UDP-inbound'ы на одном порту, чтобы не держать смешанный `tcp,udp` listener.
+- Генерирует TProxy inbound'ы только с `sockopt.tproxy = "tproxy"` и не ставит `sockopt.mark = 1`, чтобы не провоцировать локальную TCP-петлю через policy routing.
 - Генерирует и печатает `vless://` ссылку.
 - Настраивает AmneziaWG, TProxy, DNS DNAT и AdGuardHome.
 - Добавляет явное INPUT-исключение для `awg0` marked TProxy-трафика, чтобы `UFW` не дропал VPN-клиентский интернет в `ufw-not-local`.
@@ -122,10 +124,12 @@ graph TD
 
 ### What `setup.sh` does
 
-- Installs Xray-core using the official installer.
+- Installs `Xray-core 25.1.30` using the official installer and keeps that pinned version on re-runs.
 - Writes the config to `/usr/local/etc/xray/config.json`.
 - Removes legacy `x-ui` leftovers on re-runs so the host keeps a single Xray control plane.
 - Creates a `VLESS + Reality + Vision` inbound on port `443`.
+- Splits Xray TProxy handling into dedicated TCP and UDP inbounds on the same port instead of a mixed `tcp,udp` listener.
+- Builds the TProxy inbounds with `sockopt.tproxy = "tproxy"` only and avoids `sockopt.mark = 1`, so transparent TCP does not collapse into a local policy-routing loop.
 - Prints a `vless://` link.
 - Sets up AmneziaWG, TProxy, DNS DNAT, and AdGuardHome.
 - Adds an explicit INPUT allow rule for `awg0` TProxy-marked packets so `UFW` does not drop VPN internet traffic in `ufw-not-local`.
