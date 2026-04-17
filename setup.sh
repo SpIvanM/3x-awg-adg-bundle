@@ -272,6 +272,47 @@ ensure_awg_build_dependencies() {
         || err "Не удалось установить точные kernel headers (${header_pkg}) для сборки AmneziaWG."
 }
 
+load_existing_awg_credentials() {
+    if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+        log "Загрузка существующих credentials AmneziaWG из $CREDS_FILE..."
+        SERVER_PRIV=$(grep "^AWG_SERVER_PRIV=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        CLIENT_PRIV=$(grep "^AWG_CLIENT_PRIV=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        CLIENT_PSK=$(grep "^AWG_CLIENT_PSK=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        AWG_PORT=$(grep "^AWG_PORT=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        JC=$(grep "^AWG_JC=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        JMIN=$(grep "^AWG_JMIN=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        JMAX=$(grep "^AWG_JMAX=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        S1=$(grep "^AWG_S1=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        S2=$(grep "^AWG_S2=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        H1=$(grep "^AWG_H1=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        H2=$(grep "^AWG_H2=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        H3=$(grep "^AWG_H3=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+        H4=$(grep "^AWG_H4=" "$CREDS_FILE" | cut -d'=' -f2- | xargs)
+    fi
+
+    if [ -z "$SERVER_PRIV" ] || [ -z "$CLIENT_PRIV" ] || [ -z "$CLIENT_PSK" ]; then
+        if [ -f /etc/amnezia/amneziawg/awg0.conf ] && [ -f /root/amnezia_client.conf ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+            log "Восстанавливаем существующие credentials AmneziaWG из текущих конфигов..."
+            SERVER_PRIV=$(grep "^PrivateKey = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            CLIENT_PRIV=$(grep "^PrivateKey = " /root/amnezia_client.conf | head -n1 | cut -d'=' -f2- | xargs)
+            CLIENT_PSK=$(grep "^PresharedKey = " /root/amnezia_client.conf | head -n1 | cut -d'=' -f2- | xargs)
+            AWG_PORT=$(grep "^ListenPort = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            JC=$(grep "^Jc = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            JMIN=$(grep "^Jmin = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            JMAX=$(grep "^Jmax = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            S1=$(grep "^S1 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            S2=$(grep "^S2 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            H1=$(grep "^H1 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            H2=$(grep "^H2 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            H3=$(grep "^H3 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+            H4=$(grep "^H4 = " /etc/amnezia/amneziawg/awg0.conf | head -n1 | cut -d'=' -f2- | xargs)
+        fi
+    fi
+
+    [ -n "$SERVER_PRIV" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | awg pubkey)
+    [ -n "$CLIENT_PRIV" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | awg pubkey)
+}
+
 validate_stack() {
     local agh_service_name="$1"
 
@@ -286,6 +327,9 @@ validate_stack() {
     ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
+    sysctl -n net.ipv4.conf.all.src_valid_mark | grep -qx '1' || err "src_valid_mark не включён, TProxy-marked пакеты могут отбрасываться policy routing."
+    iptables -C INPUT -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT \
+        || err "Нет INPUT-исключения для marked TProxy-пакетов awg0: UFW может дропать AWG интернет-трафик."
 }
 # Удаляет устаревшие статические правила iptables DNAT для DNS-порта 53 на awg0,
 # которые могли остаться от предыдущих версий скрипта (до переноса правил в PostUp/PostDown).
@@ -400,6 +444,9 @@ net.ipv4.tcp_congestion_control = bbr
 net.ipv4.ip_forward = 1
 # Требуется для TProxy: позволяет направлять трафик на loopback-адреса
 net.ipv4.conf.all.route_localnet = 1
+# Требуется для TProxy policy routing по fwmark, иначе ядро/UFW могут отбрасывать marked-пакеты.
+net.ipv4.conf.all.src_valid_mark = 1
+net.ipv4.conf.default.src_valid_mark = 1
 EOF
 sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || true
 
@@ -500,25 +547,27 @@ log "Генерация ключей и конфигурации AmneziaWG..."
 mkdir -p /etc/amnezia/amneziawg
 chmod 700 /etc/amnezia/amneziawg
 
-# Параметры обфускации (Рандомизация для защиты от сигнатурного анализа ТСПУ 2026)
-JC=$(shuf -i 3-12 -n 1)
-JMIN=$(shuf -i 40-70 -n 1)
-JMAX=$(shuf -i 700-1200 -n 1)
-S1=$(shuf -i 15-150 -n 1)
-S2=$(shuf -i 151-250 -n 1)
-H1=$(shuf -i 100000000-999999999 -n 1)
-H2=$(shuf -i 100000000-999999999 -n 1)
-H3=$(shuf -i 100000000-999999999 -n 1)
-H4=$(shuf -i 100000000-999999999 -n 1)
 AWG_PORT=51820
+load_existing_awg_credentials
+
+# Параметры обфускации (Рандомизация для защиты от сигнатурного анализа ТСПУ 2026)
+[ -z "$JC" ] && JC=$(shuf -i 3-12 -n 1)
+[ -z "$JMIN" ] && JMIN=$(shuf -i 40-70 -n 1)
+[ -z "$JMAX" ] && JMAX=$(shuf -i 700-1200 -n 1)
+[ -z "$S1" ] && S1=$(shuf -i 15-150 -n 1)
+[ -z "$S2" ] && S2=$(shuf -i 151-250 -n 1)
+[ -z "$H1" ] && H1=$(shuf -i 100000000-999999999 -n 1)
+[ -z "$H2" ] && H2=$(shuf -i 100000000-999999999 -n 1)
+[ -z "$H3" ] && H3=$(shuf -i 100000000-999999999 -n 1)
+[ -z "$H4" ] && H4=$(shuf -i 100000000-999999999 -n 1)
 # Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
-SERVER_PRIV=$(awg genkey)
-SERVER_PUB=$(echo "$SERVER_PRIV" | awg pubkey)
-CLIENT_PRIV=$(awg genkey)
-CLIENT_PUB=$(echo "$CLIENT_PRIV" | awg pubkey)
-CLIENT_PSK=$(awg genpsk)
+[ -z "$SERVER_PRIV" ] && SERVER_PRIV=$(awg genkey)
+[ -z "$CLIENT_PRIV" ] && CLIENT_PRIV=$(awg genkey)
+[ -z "$CLIENT_PSK" ] && CLIENT_PSK=$(awg genpsk)
+[ -n "$SERVER_PRIV" ] && [ -z "$SERVER_PUB" ] && SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | awg pubkey)
+[ -n "$CLIENT_PRIV" ] && [ -z "$CLIENT_PUB" ] && CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | awg pubkey)
 
 cat <<EOF > /etc/amnezia/amneziawg/awg0.conf
 [Interface]
@@ -561,6 +610,8 @@ PostUp = iptables -t mangle -A AWG_TPROXY -p tcp --dport 53 -j RETURN
 PostUp = iptables -t mangle -A AWG_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A AWG_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 1
 PostUp = iptables -t mangle -A PREROUTING -i awg0 -j AWG_TPROXY
+# UFW видит TProxy-пакеты как non-local и может уронить их в ufw-not-local без явного allow по mark.
+PostUp = iptables -I INPUT 1 -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT
 
 PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $PUB_INT -j MASQUERADE 2>/dev/null || true
 PostDown = iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port $ADG_DNS_PORT 2>/dev/null || true
@@ -568,6 +619,7 @@ PostDown = iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT -
 PostDown = iptables -t mangle -D PREROUTING -i awg0 -j AWG_TPROXY 2>/dev/null || true
 PostDown = iptables -t mangle -F AWG_TPROXY 2>/dev/null || true
 PostDown = iptables -t mangle -X AWG_TPROXY 2>/dev/null || true
+PostDown = iptables -D INPUT -i awg0 -m mark --mark 1 -m comment --comment awg-tproxy-input -j ACCEPT 2>/dev/null || true
 PostDown = ip rule del fwmark 1 table 100 2>/dev/null || true
 PostDown = ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 
@@ -835,6 +887,19 @@ ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
 ADG_USER=${ADG_USER}
 ADG_PASS=${ADG_PASS}
 ADG_DNS_PORT=${ADG_DNS_PORT}
+AWG_PORT=${AWG_PORT}
+AWG_SERVER_PRIV=${SERVER_PRIV}
+AWG_CLIENT_PRIV=${CLIENT_PRIV}
+AWG_CLIENT_PSK=${CLIENT_PSK}
+AWG_JC=${JC}
+AWG_JMIN=${JMIN}
+AWG_JMAX=${JMAX}
+AWG_S1=${S1}
+AWG_S2=${S2}
+AWG_H1=${H1}
+AWG_H2=${H2}
+AWG_H3=${H3}
+AWG_H4=${H4}
 AWG_CLIENT_CONF=/root/amnezia_client.conf
 CREDS
 chmod 600 "$CREDS_FILE"

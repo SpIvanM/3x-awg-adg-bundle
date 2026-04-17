@@ -55,6 +55,7 @@ graph TD
 - Поднимает `VLESS + Reality + Vision` inbound на `443`.
 - Генерирует и печатает `vless://` ссылку.
 - Настраивает AmneziaWG, TProxy, DNS DNAT и AdGuardHome.
+- Добавляет явное INPUT-исключение для `awg0` marked TProxy-трафика, чтобы `UFW` не дропал VPN-клиентский интернет в `ufw-not-local`.
 - Оставляет клиентский профиль AmneziaWG IPv4-only (`AllowedIPs = 0.0.0.0/0`) до полноценной реализации IPv6-маршрутизации.
 - Включает базовое hardening: `UFW`, `Fail2Ban`, `BBR`, `sysctl`, SSH на `2244`.
 
@@ -69,6 +70,8 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
+
+- Повторный запуск без `--rotate` должен переиспользовать текущие credentials `Xray`, `AdGuardHome` и `AmneziaWG`, а не пересоздавать клиентский AWG-профиль.
 
 ### Удаление
 
@@ -124,6 +127,7 @@ graph TD
 - Creates a `VLESS + Reality + Vision` inbound on port `443`.
 - Prints a `vless://` link.
 - Sets up AmneziaWG, TProxy, DNS DNAT, and AdGuardHome.
+- Adds an explicit INPUT allow rule for `awg0` TProxy-marked packets so `UFW` does not drop VPN internet traffic in `ufw-not-local`.
 - Ships the AmneziaWG client profile as IPv4-only (`AllowedIPs = 0.0.0.0/0`) until IPv6 routing is implemented intentionally.
 - Enables baseline hardening: `UFW`, `Fail2Ban`, `BBR`, `sysctl`, SSH on `2244`.
 
@@ -138,6 +142,8 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
+
+- A re-run without `--rotate` is expected to reuse the current `Xray`, `AdGuardHome`, and `AmneziaWG` credentials instead of replacing the active AWG client profile.
 
 ### Uninstall
 
