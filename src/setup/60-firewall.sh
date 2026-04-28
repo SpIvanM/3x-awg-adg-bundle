@@ -11,10 +11,14 @@ else
 fi
 
 ufw default allow outgoing
+mark_step "Firewall: target allow Reality 443/tcp"
 ufw allow 443/tcp
+mark_step "Firewall: target allow AdGuardHome web"
 ufw allow ${ADG_PORT}/tcp
+mark_step "Firewall: target allow AWG 53/udp"
 ufw allow ${AWG_PORT}/udp
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
+mark_step "Firewall: target allow AdGuardHome DNS from awg0"
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable

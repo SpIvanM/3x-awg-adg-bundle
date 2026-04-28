@@ -59,6 +59,12 @@ echo -e "Официальный installer 3x-ui уже был запущен и�
 echo -e "Дальнейшая настройка панели, inbound Reality и клиентских ссылок выполняется ${YELLOW}вручную${RESET}."
 echo -e "Если для панели выбран отдельный порт, откройте его в UFW вручную после настройки."
 
+echo -e "\n${GREEN}Target handoff для relay:${RESET}"
+echo -e "IP: ${SERVER_IP}"
+echo -e "AWG: ${SERVER_IP}:53/udp"
+echo -e "Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
+echo -e "DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
+
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
 echo -e "DNS реальный порт: ${YELLOW}${ADG_DNS_PORT}${RESET} (клиент видит 10.8.0.1:53 через DNAT)"

@@ -15,7 +15,7 @@
 #   - src/setup/60-firewall.sh
 #   - src/setup/70-output.sh
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [--mode target|relay] [-r | --rotate]
-# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard Home, and launches the official interactive 3x-ui installer. Relay mode is intentionally stopped early until the next stage.
+# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up target-mode AdGuard Home and AmneziaWG endpoints, and launches the official interactive 3x-ui installer. Relay mode is intentionally stopped early until the next stage.
 # Returns: Configured VPN stack with connection details.
 # Fails: If run without root privileges or with an invalid --mode value.
 # ==============================================================================
@@ -27,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.2"
+SCRIPT_VERSION="3.0.3"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
@@ -254,6 +254,19 @@ cleanup_legacy_awg_dns_redirects() {
     iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
 }
 
+ensure_awg_obfuscation_params() {
+    # Preserve restored AmneziaWG noise parameters; fill only missing values.
+    [ -z "$JC" ] && JC=$(shuf -i 3-12 -n 1)
+    [ -z "$JMIN" ] && JMIN=$(shuf -i 40-70 -n 1)
+    [ -z "$JMAX" ] && JMAX=$(shuf -i 700-1200 -n 1)
+    [ -z "$S1" ] && S1=$(shuf -i 15-150 -n 1)
+    [ -z "$S2" ] && S2=$(shuf -i 151-250 -n 1)
+    [ -z "$H1" ] && H1=$(shuf -i 100000000-999999999 -n 1)
+    [ -z "$H2" ] && H2=$(shuf -i 100000000-999999999 -n 1)
+    [ -z "$H3" ] && H3=$(shuf -i 100000000-999999999 -n 1)
+    [ -z "$H4" ] && H4=$(shuf -i 100000000-999999999 -n 1)
+}
+
 cleanup_legacy_adguard_units() {
     systemctl stop AdGuardHome 2>/dev/null || true
     systemctl stop adguardhome 2>/dev/null || true
@@ -420,24 +433,17 @@ mark_step "AmneziaWG: prepare config directory"
 mkdir -p /etc/amnezia/amneziawg
 chmod 700 /etc/amnezia/amneziawg
 
-AWG_PORT=51820
+AWG_PORT=53
 mark_step "AmneziaWG: resolve AWG key binary"
 AWG_KEY_BIN="$(resolve_awg_key_bin || true)"
 [ -n "$AWG_KEY_BIN" ] || err "Не найден awg/wg после установки AmneziaWG."
 mark_step "AmneziaWG: load existing credentials"
 load_existing_awg_credentials
+AWG_PORT=53
 
 # Параметры обфускации (Рандомизация для защиты от сигнатурного анализа ТСПУ 2026)
 mark_step "AmneziaWG: generate obfuscation parameters"
-[ -z "$JC" ] && JC=$(shuf -i 3-12 -n 1)
-[ -z "$JMIN" ] && JMIN=$(shuf -i 40-70 -n 1)
-[ -z "$JMAX" ] && JMAX=$(shuf -i 700-1200 -n 1)
-[ -z "$S1" ] && S1=$(shuf -i 15-150 -n 1)
-[ -z "$S2" ] && S2=$(shuf -i 151-250 -n 1)
-[ -z "$H1" ] && H1=$(shuf -i 100000000-999999999 -n 1)
-[ -z "$H2" ] && H2=$(shuf -i 100000000-999999999 -n 1)
-[ -z "$H3" ] && H3=$(shuf -i 100000000-999999999 -n 1)
-[ -z "$H4" ] && H4=$(shuf -i 100000000-999999999 -n 1)
+ensure_awg_obfuscation_params
 # Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
@@ -462,6 +468,7 @@ cat <<EOF > /etc/amnezia/amneziawg/awg0.conf
 Address = 10.8.0.1/24
 ListenPort = $AWG_PORT
 PrivateKey = $SERVER_PRIV
+MTU = 1280
 Jc = $JC
 Jmin = $JMIN
 Jmax = $JMAX
@@ -502,6 +509,7 @@ cat <<EOF > /root/amnezia_client.conf
 PrivateKey = $CLIENT_PRIV
 Address = 10.8.0.2/32
 DNS = 10.8.0.1
+MTU = 1280
 Jc = $JC
 Jmin = $JMIN
 Jmax = $JMAX
@@ -671,10 +679,14 @@ else
 fi
 
 ufw default allow outgoing
+mark_step "Firewall: target allow Reality 443/tcp"
 ufw allow 443/tcp
+mark_step "Firewall: target allow AdGuardHome web"
 ufw allow ${ADG_PORT}/tcp
+mark_step "Firewall: target allow AWG 53/udp"
 ufw allow ${AWG_PORT}/udp
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
+mark_step "Firewall: target allow AdGuardHome DNS from awg0"
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
@@ -771,6 +783,12 @@ echo -e "Reality порт зарезервирован: ${YELLOW}${REALITY_PORT}
 echo -e "Официальный installer 3x-ui уже был запущен интерактивно."
 echo -e "Дальнейшая настройка панели, inbound Reality и клиентских ссылок выполняется ${YELLOW}вручную${RESET}."
 echo -e "Если для панели выбран отдельный порт, откройте его в UFW вручную после настройки."
+
+echo -e "\n${GREEN}Target handoff для relay:${RESET}"
+echo -e "IP: ${SERVER_IP}"
+echo -e "AWG: ${SERVER_IP}:53/udp"
+echo -e "Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
+echo -e "DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
 
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"

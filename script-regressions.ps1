@@ -1,10 +1,10 @@
 ﻿<#
 Name: script regression checks
-Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, and the stage-3 manual 3x-ui flow.
+Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, and the stage-4 target topology.
 Usage: powershell -File .\script-regressions.ps1
-Behavior: Reads setup.sh, uninstall.sh, source module index, and the build script and fails if the modular source layout regresses.
+Behavior: Reads setup.sh, uninstall.sh, source module index, and the build script and fails if the modular source layout or target topology regresses.
 Returns: Exit code 0 on pass, non-zero on regression.
-Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, or the stage-3 manual 3x-ui flow are absent.
+Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, or the stage-4 target topology are absent.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -78,6 +78,20 @@ function Assert-PathExists {
     }
 }
 
+function Assert-MatchCount {
+    param(
+        [string]$Text,
+        [string]$Pattern,
+        [int]$ExpectedCount,
+        [string]$Message
+    )
+
+    $actualCount = ([regex]::Matches($Text, $Pattern)).Count
+    if ($actualCount -ne $ExpectedCount) {
+        throw "$Message Expected $ExpectedCount, got $actualCount."
+    }
+}
+
 function Assert-PathMissing {
     param(
         [string]$LiteralPath,
@@ -122,8 +136,12 @@ $awgHelpers = $moduleTexts["11-awg-helpers.sh"]
 $aghHelpers = $moduleTexts["12-agh-helpers.sh"]
 $threeXHelpers = $moduleTexts["13-3x-helpers.sh"]
 $forwardingHelpers = $moduleTexts["14-port-forwarding-helpers.sh"]
+$awgSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '40-awg.sh')
+$adguardSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '50-adguard.sh')
+$firewallSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '60-firewall.sh')
+$outputSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '70-output.sh')
 
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.2"' -Message 'setup.sh must expose installer version 3.0.2 after the stage-3 rebuild.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.3"' -Message 'setup.sh must expose installer version 3.0.3 after the stage-4 rebuild.'
 Assert-Match -Text $setup -Pattern 'DEPLOY_MODE="target"' -Message 'setup.sh must default DEPLOY_MODE to target.'
 Assert-Match -Text $setup -Pattern '--mode\)' -Message 'setup.sh must accept --mode CLI argument.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version.'
@@ -175,6 +193,28 @@ Assert-NotMatch -Text $forwardingHelpers -Pattern "reset_cascade_state\(\)|parse
 Assert-NotMatch -Text $setup -Pattern 'install_xray_core|write_xray_config|CASCADE_|ADG_HTTP_PROXY_PORT|VLESS_LINK|install-release\.sh|generate_reality_keys|resolve_xray_bin' -Message 'setup.sh must remove the legacy Xray/cascade implementation during stage 3.'
 Assert-NotMatch -Text $setupIndex -Pattern 'legacy cascade|VLESS|Xray config|bootstrap Xray-core|Reality keys' -Message 'src/setup/README.md must be updated for the stage-3 manual 3x-ui flow.'
 Assert-Match -Text $setup -Pattern 'if \[ "\$DEPLOY_MODE" = "relay" \]; then\s+err "Режим relay будет реализован на следующем этапе\. На этапе 3 он намеренно остановлен до начала настройки сервисов\."\s+fi' -Message 'setup.sh must stop relay before partial service setup during stage 3.'
+
+Assert-Match -Text $awgSource -Pattern 'AWG_PORT=53' -Message '40-awg.sh must pin target AmneziaWG to UDP port 53.'
+Assert-Match -Text $setup -Pattern 'ListenPort = \$AWG_PORT' -Message 'setup.sh must write the selected AWG listen port into awg0.conf.'
+Assert-MatchCount -Text $awgSource -Pattern 'MTU = 1280' -ExpectedCount 2 -Message '40-awg.sh must write MTU 1280 into both server and client AWG configs.'
+Assert-MatchCount -Text $setup -Pattern 'MTU = 1280' -ExpectedCount 2 -Message 'setup.sh must write MTU 1280 into both server and client AWG configs.'
+Assert-Match -Text $awgSource -Pattern 'ensure_awg_obfuscation_params' -Message '40-awg.sh must use an idempotent AWG obfuscation parameter helper.'
+Assert-Match -Text $awgHelpers -Pattern 'ensure_awg_obfuscation_params\(\)' -Message '11-awg-helpers.sh must own idempotent AWG obfuscation parameter generation.'
+foreach ($param in @('JC', 'JMIN', 'JMAX', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4')) {
+    Assert-Match -Text $awgHelpers -Pattern ('\[ -z "\${0}" \]' -f $param) -Message "11-awg-helpers.sh must preserve existing $param and generate it only when missing."
+}
+Assert-NotMatch -Text $adguardSource -Pattern 'proxy|upstream_http_proxy|http_proxy|ADG_HTTP_PROXY_PORT' -Message '50-adguard.sh must keep AdGuardHome direct and free of HTTP proxy dependencies.'
+Assert-Contains -Text $outputSource -Needle 'Target handoff для relay' -Message '70-output.sh must print a target-specific relay handoff block.'
+Assert-Contains -Text $outputSource -Needle 'IP: ${SERVER_IP}' -Message '70-output.sh must print target IP for relay setup.'
+Assert-Contains -Text $outputSource -Needle 'AWG: ${SERVER_IP}:53/udp' -Message '70-output.sh must print target AWG endpoint on UDP 53.'
+Assert-Contains -Text $outputSource -Needle 'Reality: ${SERVER_IP}:${REALITY_PORT}/tcp' -Message '70-output.sh must print target Reality endpoint on TCP 443.'
+Assert-Contains -Text $outputSource -Needle 'DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}' -Message '70-output.sh must print target DNS endpoint for relay setup.'
+Assert-Contains -Text $firewallSource -Needle 'Firewall: target allow Reality 443/tcp' -Message '60-firewall.sh must include a target-specific Reality firewall marker.'
+Assert-Contains -Text $firewallSource -Needle 'Firewall: target allow AWG 53/udp' -Message '60-firewall.sh must include a target-specific AWG firewall marker.'
+Assert-Contains -Text $firewallSource -Needle 'Firewall: target allow AdGuardHome web' -Message '60-firewall.sh must include a target-specific AdGuardHome web marker.'
+Assert-Match -Text $setupIndex -Pattern '40-awg\.sh.*53/udp.*MTU 1280' -Message 'src/setup/README.md must document the target AWG port and MTU.'
+Assert-Match -Text $setupIndex -Pattern '60-firewall\.sh.*target.*Reality 443.*AWG 53' -Message 'src/setup/README.md must document target firewall openings.'
+Assert-Match -Text $setupIndex -Pattern '70-output\.sh.*Target handoff.*relay' -Message 'src/setup/README.md must document target relay handoff output.'
 
 Assert-Match -Text $uninstall -Pattern '</dev/tty' -Message 'uninstall.sh must keep reading confirmation from /dev/tty.'
 

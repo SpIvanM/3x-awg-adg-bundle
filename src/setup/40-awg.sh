@@ -39,24 +39,17 @@ mark_step "AmneziaWG: prepare config directory"
 mkdir -p /etc/amnezia/amneziawg
 chmod 700 /etc/amnezia/amneziawg
 
-AWG_PORT=51820
+AWG_PORT=53
 mark_step "AmneziaWG: resolve AWG key binary"
 AWG_KEY_BIN="$(resolve_awg_key_bin || true)"
 [ -n "$AWG_KEY_BIN" ] || err "Не найден awg/wg после установки AmneziaWG."
 mark_step "AmneziaWG: load existing credentials"
 load_existing_awg_credentials
+AWG_PORT=53
 
 # Параметры обфускации (Рандомизация для защиты от сигнатурного анализа ТСПУ 2026)
 mark_step "AmneziaWG: generate obfuscation parameters"
-[ -z "$JC" ] && JC=$(shuf -i 3-12 -n 1)
-[ -z "$JMIN" ] && JMIN=$(shuf -i 40-70 -n 1)
-[ -z "$JMAX" ] && JMAX=$(shuf -i 700-1200 -n 1)
-[ -z "$S1" ] && S1=$(shuf -i 15-150 -n 1)
-[ -z "$S2" ] && S2=$(shuf -i 151-250 -n 1)
-[ -z "$H1" ] && H1=$(shuf -i 100000000-999999999 -n 1)
-[ -z "$H2" ] && H2=$(shuf -i 100000000-999999999 -n 1)
-[ -z "$H3" ] && H3=$(shuf -i 100000000-999999999 -n 1)
-[ -z "$H4" ] && H4=$(shuf -i 100000000-999999999 -n 1)
+ensure_awg_obfuscation_params
 # Случайный порт DNS для AdGuardHome (не 53 — DNAT-редирект в awg0.conf)
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
@@ -81,6 +74,7 @@ cat <<EOF > /etc/amnezia/amneziawg/awg0.conf
 Address = 10.8.0.1/24
 ListenPort = $AWG_PORT
 PrivateKey = $SERVER_PRIV
+MTU = 1280
 Jc = $JC
 Jmin = $JMIN
 Jmax = $JMAX
@@ -121,6 +115,7 @@ cat <<EOF > /root/amnezia_client.conf
 PrivateKey = $CLIENT_PRIV
 Address = 10.8.0.2/32
 DNS = 10.8.0.1
+MTU = 1280
 Jc = $JC
 Jmin = $JMIN
 Jmax = $JMAX

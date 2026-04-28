@@ -68,3 +68,16 @@ cleanup_legacy_awg_dns_redirects() {
     iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
     iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
 }
+
+ensure_awg_obfuscation_params() {
+    # Preserve restored AmneziaWG noise parameters; fill only missing values.
+    [ -z "$JC" ] && JC=$(shuf -i 3-12 -n 1)
+    [ -z "$JMIN" ] && JMIN=$(shuf -i 40-70 -n 1)
+    [ -z "$JMAX" ] && JMAX=$(shuf -i 700-1200 -n 1)
+    [ -z "$S1" ] && S1=$(shuf -i 15-150 -n 1)
+    [ -z "$S2" ] && S2=$(shuf -i 151-250 -n 1)
+    [ -z "$H1" ] && H1=$(shuf -i 100000000-999999999 -n 1)
+    [ -z "$H2" ] && H2=$(shuf -i 100000000-999999999 -n 1)
+    [ -z "$H3" ] && H3=$(shuf -i 100000000-999999999 -n 1)
+    [ -z "$H4" ] && H4=$(shuf -i 100000000-999999999 -n 1)
+}

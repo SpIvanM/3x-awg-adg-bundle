@@ -15,7 +15,7 @@
 #   - src/setup/60-firewall.sh
 #   - src/setup/70-output.sh
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [--mode target|relay] [-r | --rotate]
-# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard Home, and launches the official interactive 3x-ui installer. Relay mode is intentionally stopped early until the next stage.
+# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up target-mode AdGuard Home and AmneziaWG endpoints, and launches the official interactive 3x-ui installer. Relay mode is intentionally stopped early until the next stage.
 # Returns: Configured VPN stack with connection details.
 # Fails: If run without root privileges or with an invalid --mode value.
 # ==============================================================================
@@ -27,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.2"
+SCRIPT_VERSION="3.0.3"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
