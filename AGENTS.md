@@ -79,15 +79,17 @@ graph TD
         TXR -.->|"Remote DNS"| TAGH
     end
 
+    Net(("Интернет"))
+
     %% Connections
-    U_Dir -->|"UDP/TCP"| TargetVPS
+    U_Dir -->|"UDP/TCP"| TAWG
     U_Rel -->|"К прокси-порту"| PF
     U_Rel -->|"К локальному VPN"| RAWG
     
-    PF -->|"Forward (No NAT/No Decrypt)"| TargetVPS
+    PF -->|"Forward"| TAWG
+    PF -->|"Forward"| TXR
     
-    RLoc -->|"Direct"| Net
+    RAWG -->|"Direct"| Net
+    RXR -->|"Direct"| Net
     TXR -->|"Direct"| Net
-
-    Net(("Интернет"))
 ```
