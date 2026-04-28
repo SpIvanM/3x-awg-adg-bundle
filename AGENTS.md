@@ -1,17 +1,17 @@
 <!--
 Name: 3x Architecture (Compact)
-Description: Суть и правила проекта 3x-awg-adg-bundle для AI. Описывает топологию Direct (Target) и Proxy (Relay) серверов.
+Description: Суть и правила проекта 3x-awg-adg-bundle для AI. Описывает топологию серверов.
 -->
 
 # Архитектура 3x-awg-adg-bundle
 
-Если рядом есть `.test-local/AGENTS.md`, учитывать его как локальное дополнение к этим правилам. Содержимое этого файла не коммитить.
+`.test-local/AGENTS.md` содержит сведения о подключении к серверу для отладки скрипта.
 
 ## 1. Суть и Стек
 
-**Миссия:** "One-click" DPI-shield для VPS от **512MB RAM**.
-**Стек:** AmneziaWG + Xray (Reality) + AdGuardHome (AGH).
-**Цель:** Очищенный интернет (No Ads/SafeSearch) и обход блокировок "из коробки".
+**Миссия:** Инсталятор системы обхода белых списков и DPI для 2 VPS c **512MB RAM**.
+**Стек:** AmneziaWG + 3x-ui (Reality) + AdGuardHome (AGH).
+**Цель:** Очищенный интернет (No Ads/SafeSearch) и обход устойчивый блокировок "из коробки".
 
 ## 1.1. Источник истины по коду
 
@@ -21,46 +21,40 @@ Description: Суть и правила проекта 3x-awg-adg-bundle для 
 ## 2. Ключевые правила (Инварианты)
 
 - **Идемпотентность**: Скрипт обновляет, но не ломает. Повторный запуск — безопасен.
-- **Изоляция DNS**: Никаких утечек. Весь трафик (VPN/Proxy) обязан идти через AGH.
 - **Порт 443**: Зарезервирован строго под Reality.
 - **Root-Only**: Управление ядром и фаерволом требует прав суперпользователя.
-- **Версия скрипта**: При любой правке `setup.sh` обязательно увеличивать `SCRIPT_VERSION` и обновлять проверку версии в регрессионных тестах. Это нужно, чтобы отличать новую сборку от старых копий и не запускать неактуальный инсталлятор.
-
-## 3. Логика маршрутизации
-
-- **Direct Egress**: Трафик из AmneziaWG и Xray уходит в интернет напрямую через MASQUERADE (NAT) без промежуточного TProxy.
-- **DNS Hub**: AGH работает автономно. Клиенты подключаются к нему напрямую (UDP/DoH/DoT). Перехват DNS-трафика (DNAT 53) может использоваться только для принудительного направления в AGH.
+- **Версия скрипта**: При любой правке `setup.sh` обязательно увеличивать `SCRIPT_VERSION` и обновлять проверку версии в регрессионных тестах. Это нужно, чтобы отличать новую сборку от старых копий и не запускать неактуальный инсталлятор
 
 ## 4. Безопасность и Жизненный цикл
 
-- **Obscurity**: Случайные порты, пароли и пути при каждой установке.
+- **3 режима**:
+  ---------------
+
+  - Режим освежения: чинит, настраивает, но не меняет.
+  - Режим изменения: меняются случайные порты, логины, пароли, токены и т.п. там где можно через CLI.
+  - Режим удаления: удаляются все следы
+- Для скорости: если сегодня обновления linux запускалось, то повторно оно не запускается.
 - **Hardening**: UFW + Fail2Ban + SSH (2244) + сетап BBR/sysctl.
-- **Очистка**: Удаление инструментов сборки (`git`, `make`) сразу после компиляции.
+- **Очистка**: Чистка от всего лишнего после установки. На сервере 8GB HDD.
+- Прозрачность и трассируемость: Легко отследить что пошло не так, на каком шаге.
+- Применение TDD.
+- При существенных изменениях актуализировать readme (en+ru)
 
 ## 5. Сценарии развертывания
 
 Проект поддерживает две стратегии установки, которые могут комбинироваться для обхода жестких блокировок.
-
-### Сценарий A: Target (Прямой)
-Автономный сервер с полным стеком. Все входящие подключения приходят напрямую, исходящие уходят в интернет. Используется как конечная точка (выходной узел).
-
-### Сценарий B: Relay (Проксирующий)
-Сервер-"прослойка", который:
-1. **Forwarding**: Пробрасывает трафик (L3/L4) на Target-сервер без распаковки (для скрытия реального IP Target-сервера).
-2. **Local Services**: Имеет собственный стек (AWG, 3x, AGH) для локального использования, работающий напрямую в интернет.
-3. **Optimization**: AWG на Relay-сервере использует нестандартные порты и оптимизированные параметры MTU/Server.
 
 ## 6. Топология
 
 ```mermaid
 graph TD
     subgraph Clients ["Устройства Пользователей"]
-        subgraph CDir ["Прямое подкл. (Target)"]
+        subgraph CDir ["Direct Global Connection"]
             U_Dir_AWG["AWG Client"]
-            U_Dir_XR["Reality Client"]
+            U_Dir_XR["XRay Client"]
             U_Dir_DNS["DNS Client"]
         end
-        
+  
         subgraph CRel ["Подкл. через Relay"]
             U_Rel_AWG["Relay AWG Client"]
             U_Rel_XR["Relay Reality Client"]
@@ -70,47 +64,55 @@ graph TD
         end
     end
 
-    subgraph RelayVPS ["VPS 1: Relay (Прокси)"]
+    subgraph RelayVPS ["VPS 1: с IP из белых списков до DPI "]
         subgraph PF ["Port Forwarding (L4)"]
             PF_AWG["Forward AWG"]
             PF_XR["Forward Reality"]
         end
-        
+  
         subgraph RLoc ["Локальный Стек (Direct)"]
-            RAWG["AmneziaWG <br/>(Custom Port)"]
-            RXR["3x-ui (Xray)"]
+            RAWG["AmneziaWG"]
+            RXR["3x-ui"]
             RAGH["AdGuardHome"]
         end
     end
-
-    subgraph TargetVPS ["VPS 2: Target (Конечный)"]
-        TAWG["AmneziaWG"]
-        TXR["3x-ui (Reality)"]
-        TAGH["AdGuardHome"]
+    NetRu(("Интернет РФ"))
+    subgraph Global ["Глобальный интернет"]
+        subgraph TargetVPS ["VPS 2: after DPI"]
+            TAWG["AmneziaWG"]
+            TXR["3x-ui"]
+            TAGH["AdGuardHome"]
+        end
+    Net(("Интернет"))
     end
 
-    Net(("Интернет"))
 
     %% Connections to Target (Direct)
-    U_Dir_AWG -->|"UDP"| TAWG
-    U_Dir_XR -->|"TCP 443"| TXR
-    U_Dir_DNS -->|"DoH/UDP"| TAGH
-    
-    TAWG -->|"Direct NAT"| Net
+    U_Dir_AWG -->|"UDP 53 (DPI)"| TAWG
+    U_Dir_XR -->|"TCP 443 (DPI)"| TXR
+    U_Dir_DNS -->|"DNS (Random) (DPI)"| TAGH
+  
+    TAWG -->|"Direct"| Net
     TXR -->|"Direct"| Net
-    TAGH -->|"Upstream DNS"| Net
+    TAGH -->|"Direct"| Net
 
     %% Connections to Relay
-    U_Rel_AWG -->|"К порту AWG"| PF_AWG
-    U_Rel_XR -->|"К порту Reality"| PF_XR
-    U_Rel_LAWG -->|"К локальному VPN"| RAWG
-    U_Rel_LXR -->|"К локальному Xray"| RXR
-    U_Rel_LDNS -->|"К локальному DNS"| RAGH
+    U_Rel_AWG -->|"UDP (Random)"| PF_AWG
+    U_Rel_XR -->|"TCP (Random)"| PF_XR
+    U_Rel_LAWG -->|"UDP 53"| RAWG
+    U_Rel_LXR -->|"TCP 443"| RXR
+    U_Rel_LDNS -->|"DNS (Random)"| RAGH
 
-    PF_AWG -->|"Forward"| TAWG
-    PF_XR -->|"Forward"| TXR
-    
-    RAWG -->|"Direct"| Net
-    RXR -->|"Direct"| Net
-    RAGH -->|"Direct"| Net
+    PF_AWG -->|"UDP 53 (DPI)"| TAWG
+    PF_XR -->|"TCP 443 (DPI)"| TXR
+  
+    RAWG -->|"Direct (DPI)"| Net
+    RXR -->|"Direct (DPI)"| Net
+    RAGH -->|"Direct (DPI)"| Net
+
+    RAWG -->|"Direct"| NetRu
+    RXR -->|"Direct"| NetRu
+    RAGH -->|"Direct"| NetRu
+
+
 ```

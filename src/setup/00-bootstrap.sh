@@ -1,6 +1,6 @@
 #!/bin/bash
 # Name: vps-vpn-triad (assembled source bootstrap)
-# Description: Bootstrap layer for the modular Xray Reality + AmneziaWG + AdGuardHome installer.
+# Description: Bootstrap layer for the modular 3x-ui + AmneziaWG + AdGuardHome installer.
 # Assembled from source modules:
 #   - src/setup/00-bootstrap.sh
 #   - src/setup/10-helpers.sh
@@ -10,12 +10,12 @@
 #   - src/setup/50-adguard.sh
 #   - src/setup/60-firewall.sh
 #   - src/setup/70-output.sh
-# Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [-r | --rotate] [--cascade-vless 'vless://...'] [--cascade-mode auto]
-# Behavior: Updates sysctl, installs OS packages, installs pinned Xray-core via the official installer, compiles AmneziaWG kernel module, sets up AdGuard, keeps AWG on direct NAT egress, and can still proxy AdGuardHome DNS upstreams through a cascade Reality exit when requested.
-# Returns: Direct VPN egress plus DNS server proxy routing.
-# Fails: If run without root privileges.
+# Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [--mode target|relay] [-r | --rotate]
+# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard Home, prepares 3x-ui installation command. In relay mode additionally configures L4 port forwarding to the target VPS.
+# Returns: Configured VPN stack with connection details.
+# Fails: If run without root privileges or with an invalid --mode value.
 # ==============================================================================
-# Комплексный скрипт настройки Debian 11/Ubuntu: OS Optimization + Xray Reality + AmneziaWG + AdGuardHome
+# Комплексный скрипт настройки Debian 11/Ubuntu: OS Optimization + 3x-ui + AmneziaWG + AdGuardHome
 # ==============================================================================
 
 set -Ee
@@ -23,27 +23,12 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="2.2.3"
+SCRIPT_VERSION="3.0.0"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
-CASCADE_VLESS_ARG=""
-CASCADE_MODE_ARG=""
-CASCADE_ENABLED=0
-CASCADE_MODE=""
-CASCADE_VLESS=""
-CASCADE_ADDRESS=""
-CASCADE_PORT=""
-CASCADE_UUID=""
-CASCADE_FLOW=""
-CASCADE_PBK=""
-CASCADE_SNI=""
-CASCADE_SID=""
-CASCADE_FP=""
-CASCADE_SPX=""
-CASCADE_ADDRESS_IP=""
-FINAL_MODE="direct"
+DEPLOY_MODE="target"
 CURRENT_STEP="bootstrap"
 
 mark_step() {
@@ -56,20 +41,16 @@ ROTATE_CREDS=0
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --rotate|-r) ROTATE_CREDS=1; shift ;;
-        --cascade-vless)
+        --mode)
             if [ -z "${2:-}" ]; then
-                echo "[ERROR] Аргумент --cascade-vless требует значение вида vless://..." >&2
+                echo "[ERROR] Аргумент --mode требует значение: target или relay" >&2
                 exit 1
             fi
-            CASCADE_VLESS_ARG="$2"
-            shift 2
-            ;;
-        --cascade-mode)
-            if [ -z "${2:-}" ]; then
-                echo "[ERROR] Аргумент --cascade-mode требует значение. В v1 поддерживается только auto." >&2
+            if [ "$2" != "target" ] && [ "$2" != "relay" ]; then
+                echo "[ERROR] Недопустимое значение --mode: $2. Используйте target или relay." >&2
                 exit 1
             fi
-            CASCADE_MODE_ARG="$2"
+            DEPLOY_MODE="$2"
             shift 2
             ;;
         *)
@@ -100,6 +81,7 @@ on_script_error() {
 }
 
 log "Версия скрипта: ${SCRIPT_VERSION}"
+log "Режим развёртывания: ${DEPLOY_MODE}"
 
 trap 'on_script_error "$?" "ERR" "$BASH_COMMAND"' ERR
 trap 'on_script_error 130 "INT" "$BASH_COMMAND"' INT
