@@ -1,6 +1,6 @@
 <!--
 Name: 3x Architecture (Compact)
-Description: Суть и правила проекта 3x-awg-adg-bundle для AI.
+Description: Суть и правила проекта 3x-awg-adg-bundle для AI. Описывает топологию Direct (Target) и Proxy (Relay) серверов.
 -->
 
 # Архитектура 3x-awg-adg-bundle
@@ -38,27 +38,56 @@ Description: Суть и правила проекта 3x-awg-adg-bundle для 
 - **Hardening**: UFW + Fail2Ban + SSH (2244) + сетап BBR/sysctl.
 - **Очистка**: Удаление инструментов сборки (`git`, `make`) сразу после компиляции.
 
-## 5. Топология
+## 5. Сценарии развертывания
+
+Проект поддерживает две стратегии установки, которые могут комбинироваться для обхода жестких блокировок.
+
+### Сценарий A: Target (Прямой)
+Автономный сервер с полным стеком. Все входящие подключения приходят напрямую, исходящие уходят в интернет. Используется как конечная точка (выходной узел).
+
+### Сценарий B: Relay (Проксирующий)
+Сервер-"прослойка", который:
+1. **Forwarding**: Пробрасывает трафик (L3/L4) на Target-сервер без распаковки (для скрытия реального IP Target-сервера).
+2. **Local Services**: Имеет собственный стек (AWG, 3x, AGH) для локального использования, работающий напрямую в интернет.
+3. **Optimization**: AWG на Relay-сервере использует нестандартные порты и оптимизированные параметры MTU/Server.
+
+## 6. Топология
 
 ```mermaid
 graph TD
-    User("Устройства")
-  
-    subgraph VPS ["VPS Сервер"]
-        AWG["AmneziaWG"]
-        XR["Xray (Reality)"]
-        AGH["AdGuardHome"]
-
-        AWG -->|"TProxy"| XR
-        AWG -.->|"DNAT 53"| AGH
-        XR -.->|"Remote DNS"| AGH
+    subgraph Clients ["Устройства Пользователей"]
+        U_Dir["Прямое подкл."]
+        U_Rel["Подкл. через Relay"]
     end
 
-    XR -->|"Direct / Reality"| Net(("Интернет"))
-    AGH -->|"DNSSEC / DoH / DoT"| DNS(("Public DNS"))
+    subgraph RelayVPS ["VPS 1: Relay (Прокси)"]
+        PF["Port Forwarding <br/>(iptables/ufw)"]
+        subgraph RLoc ["Локальный Стек (Direct)"]
+            RAWG["AmneziaWG <br/>(Custom Port)"]
+            RXR["Xray (3x-ui)"]
+            RAGH["AdGuardHome"]
+        end
+    end
 
-    User -->|"UDP (AWG)"| AWG
-    User -->|"TCP 443 (Reality)"| XR
-    User -->|"Web / DoH / DoT / DNS"| AGH
-    User -->|"Web UI"| XR
+    subgraph TargetVPS ["VPS 2: Target (Конечный)"]
+        TAWG["AmneziaWG"]
+        TXR["Xray (Reality)"]
+        TAGH["AdGuardHome"]
+        
+        TAWG -->|"TProxy"| TXR
+        TAWG -.->|"DNAT 53"| TAGH
+        TXR -.->|"Remote DNS"| TAGH
+    end
+
+    %% Connections
+    U_Dir -->|"UDP/TCP"| TargetVPS
+    U_Rel -->|"К прокси-порту"| PF
+    U_Rel -->|"К локальному VPN"| RAWG
+    
+    PF -->|"Forward (No NAT/No Decrypt)"| TargetVPS
+    
+    RLoc -->|"Direct"| Net
+    TXR -->|"Direct"| Net
+
+    Net(("Интернет"))
 ```
