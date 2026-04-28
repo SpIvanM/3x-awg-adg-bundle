@@ -23,30 +23,13 @@ cat <<CREDS > "$CREDS_FILE"
 # Generated: $(date -Iseconds)
 # ====================================
 SSH_PORT=2244
-XRAY_PORT=443
-XRAY_UUID=${XRAY_UUID}
-XRAY_PRIVATE_KEY=${XRAY_PRIVATE_KEY}
-XRAY_PUBLIC_KEY=${XRAY_PUBLIC_KEY}
-XRAY_SHORT_ID=${XRAY_SHORT_ID}
-VLESS_LINK=${VLESS_LINK}
-CASCADE_ENABLED=${CASCADE_ENABLED}
-CASCADE_MODE=${CASCADE_MODE}
-CASCADE_VLESS=${CASCADE_VLESS}
-CASCADE_ADDRESS=${CASCADE_ADDRESS}
-CASCADE_PORT=${CASCADE_PORT}
-CASCADE_UUID=${CASCADE_UUID}
-CASCADE_FLOW=${CASCADE_FLOW}
-CASCADE_PBK=${CASCADE_PBK}
-CASCADE_SNI=${CASCADE_SNI}
-CASCADE_SID=${CASCADE_SID}
-CASCADE_FP=${CASCADE_FP}
-CASCADE_SPX=${CASCADE_SPX}
-FINAL_MODE=${FINAL_MODE}
+DEPLOY_MODE=${DEPLOY_MODE}
+SERVER_IP=${SERVER_IP}
+REALITY_PORT=${REALITY_PORT}
 ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
 ADG_USER=${ADG_USER}
 ADG_PASS=${ADG_PASS}
 ADG_DNS_PORT=${ADG_DNS_PORT}
-ADG_HTTP_PROXY_PORT=${ADG_HTTP_PROXY_PORT}
 AWG_PORT=${AWG_PORT}
 AWG_SERVER_PRIV=${SERVER_PRIV}
 AWG_CLIENT_PRIV=${CLIENT_PRIV}
@@ -70,11 +53,12 @@ echo -e "\n=================================================================="
 echo -e "${GREEN}SSH доступ:${RESET}"
 echo -e "Порт: ${YELLOW}2244${RESET}"
 
-echo -e "\n${GREEN}Xray Reality:${RESET}"
-echo -e "Порт: ${YELLOW}443${RESET}"
-echo -e "Конфиг: ${YELLOW}/usr/local/etc/xray/config.json${RESET}"
-echo -e "Дефолтная ссылка VLESS (Reality): ${YELLOW}${VLESS_LINK}${RESET}"
-echo -e "Режим маршрутизации: ${YELLOW}${FINAL_MODE}${RESET}"
+echo -e "\n${GREEN}3x-ui / Reality:${RESET}"
+echo -e "Reality порт зарезервирован: ${YELLOW}${REALITY_PORT}${RESET}"
+echo -e "Официальный installer 3x-ui уже был запущен интерактивно."
+echo -e "Дальнейшая настройка панели, inbound Reality и клиентских ссылок выполняется ${YELLOW}вручную${RESET}."
+echo -e "Если для панели выбран отдельный порт, откройте его в UFW вручную после настройки."
+
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
 echo -e "DNS реальный порт: ${YELLOW}${ADG_DNS_PORT}${RESET} (клиент видит 10.8.0.1:53 через DNAT)"

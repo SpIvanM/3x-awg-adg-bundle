@@ -1,16 +1,16 @@
 <!--
-Name: Xray Reality Bundle Guide
-Description: Documentation for the automated VPN/DNS bundle (Xray Reality, AmneziaWG, AdGuardHome).
+Name: 3x Bundle Guide
+Description: Документация по поэтапному инсталлятору 3x-awg-adg-bundle. На этапе 3 скрипт поднимает AmneziaWG и AdGuardHome, запускает официальный интерактивный installer 3x-ui и передаёт дальнейшую настройку панели оператору вручную.
 Usage: Read before running setup.sh or uninstall.sh.
-Behavior: Explains the direct Xray install flow, generated outputs, and cleanup path.
+Behavior: Explains the current target-only stage, manual 3x-ui handoff, generated outputs, and cleanup path.
 Returns: Operator reference for the current bundle layout.
 Fails: N/A.
 -->
 
 # 3x-awg-adg-bundle
 
-Auto-deploys a compact VPN/DNS stack for a VPS: **AmneziaWG**, **Xray Reality**, and **AdGuardHome**.
-The installer configures Xray directly. Panel-based management is not part of the default path anymore.
+Stage-based installer for a compact VPS stack: **3x-ui**, **AmneziaWG**, and **AdGuardHome**.
+At the current stage, `setup.sh` supports `target` only. `relay` intentionally stops early with a clear error until the next migration stage.
 
 [🇷🇺 Перейти к русской версии](#russian) | [🇺🇸 Switch to English version](#english)
 
@@ -18,50 +18,30 @@ The installer configures Xray directly. Panel-based management is not part of th
 
 ## <span id="russian"></span>🇷🇺 Русский
 
-Этот проект превращает чистый VPS в связку из трёх компонентов:
-- AmneziaWG для VPN-доступа.
-- Xray Reality на `443`.
-- AdGuardHome для DNS-фильтрации и SafeSearch.
-- Опциональный каскад через внешний `VLESS Reality` upstream для DNS-выхода AdGuardHome, при этом AWG-трафик идёт direct.
+### Что сейчас умеет проект
 
-### Топология
+- Запускает официальный интерактивный installer `3x-ui`.
+- Не делает silent install и не конфигурирует `3x-ui` автоматически.
+- Поднимает `AmneziaWG` и `AdGuardHome` как direct-стек текущего этапа.
+- Сохраняет credentials для `AWG` и `AdGuardHome` в `/root/.vpn-credentials`.
+- Оставляет порт `443` зарезервированным под `Reality`, но сам inbound и клиентские ссылки оператор настраивает вручную уже внутри `3x-ui`.
 
-```mermaid
-graph TD
-    User([Устройства])
+### Ограничения этапа 3
 
-    subgraph VPS [VPS Сервер]
-        AWG[AmneziaWG]
-        XR[Xray Reality]
-        AGH[AdGuardHome]
-
-        AWG -->|Direct NAT| Net((Интернет))
-        AWG -.->|DNS DNAT 53| AGH
-        XR -.->|Remote DNS| AGH
-    end
-
-    XR -->|VLESS / Reality| Net((Интернет))
-    AGH -->|DoH / DoT / UDP| DNS((Публичный DNS))
-
-    User -->|UDP| AWG
-    User -->|TCP 443| XR
-    User -->|Web UI / DNS| AGH
-```
+- Поддерживается только `--mode target`.
+- `--mode relay` специально завершает работу до начала настройки сервисов с понятным fail-fast сообщением.
+- `setup.sh` больше не хранит и не генерирует legacy `Xray/cascade` конфиг, `CASCADE_*`, `VLESS_LINK` и `ADG_HTTP_PROXY_PORT`.
 
 ### Что делает `setup.sh`
 
-- Устанавливает `Xray-core 25.1.30` через официальный installer и не откатывается обратно на `latest` при повторном запуске.
-- Пишет конфиг в `/usr/local/etc/xray/config.json`.
-- Сам `setup.sh` теперь собирается из модулей в `src/setup/` через [`tools/build-setup.ps1`](tools/build-setup.ps1); `src/setup/README.md` описывает порядок и назначение частей.
-- Удаляет legacy `x-ui`, если он остался от предыдущих версий, чтобы не было split-brain control plane.
-- Поднимает `VLESS + Reality + Vision` inbound на `443`.
-- AWG-клиенты выходят в интернет напрямую через MASQUERADE, без Xray/TProxy на dataplane.
-- Опционально включает cascade mode через `--cascade-vless`, где внешний `VLESS Reality` upstream может использоваться только для DNS-выхода AdGuardHome, а доменный upstream на этапе установки резолвится в IP, чтобы не ловить DNS-лупы.
-- Проксирует upstream DNS AdGuardHome через локальный Xray HTTP proxy и DoH.
-- Генерирует и печатает `vless://` ссылку.
-- Настраивает AmneziaWG direct egress, DNS DNAT и AdGuardHome.
-- Оставляет клиентский профиль AmneziaWG IPv4-only (`AllowedIPs = 0.0.0.0/0`) до полноценной реализации IPv6-маршрутизации.
-- Включает базовое hardening: `UFW`, `Fail2Ban`, `BBR`, `sysctl`, SSH на `2244`.
+- Обновляет базовую систему и ставит обязательные пакеты.
+- Готовит `sysctl`, `BBR`, `swapfile`, `UFW`, `Fail2Ban`, SSH на `2244`.
+- Собирает и настраивает `AmneziaWG`.
+- Устанавливает и настраивает `AdGuardHome` без HTTP proxy-зависимости от `Xray`.
+- Запускает официальный installer `3x-ui` через `/dev/tty`, чтобы оператор прошёл ручной интерактивный flow.
+- После installer-а выводит handoff: дальнейшая настройка панели, `Reality` inbound и клиентских ссылок выполняется вручную вне скрипта.
+
+Официальная команда installer-а `3x-ui` сверена с первичным источником: [MHSanaei/3x-ui Wiki](https://github.com/MHSanaei/3x-ui/wiki/Installation) и [репозиторием MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui).
 
 ### Установка
 
@@ -69,27 +49,18 @@ graph TD
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
-### Установка с каскадом
-
-```bash
-sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | \
-  sudo bash -s -- --cascade-vless 'vless://UUID@host:443?type=tcp&security=reality&encryption=none&pbk=...&sni=...&sid=...'
-```
-
-- В `v1` принимается только `vless://` c `type=tcp`, `security=reality`, `encryption=none`.
-- `--cascade-mode auto` можно передать явно, но это единственный поддерживаемый режим и он же включается по умолчанию вместе с `--cascade-vless`.
-- Каскад больше не затрагивает AWG-выход и влияет только на DNS-выход AdGuardHome.
-
 ### Повторный запуск с ротацией
 
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
-- Повторный запуск без `--rotate` должен переиспользовать текущие credentials `Xray`, `AdGuardHome` и `AmneziaWG`, а не пересоздавать клиентский AWG-профиль.
-- При повторном запуске сохранённые credentials и восстановленные значения из существующих конфигов нормализуются от `CRLF`, чтобы Windows-переносы строк не попадали внутрь `Xray` JSON и `AWG`/`AGH` runtime-конфигов.
-- Если повторный запуск делается без `--cascade-vless`, скрипт отключает optional DNS cascade и переписывает `CASCADE_*` поля в credentials.
-- При сбое `setup.sh` теперь пишет текущий шаг всегда; для необработанных ошибок дополнительно показывается упавшая команда, чтобы AWG-ошибки можно было локализовать без ручного перебора логов.
+### Что настроить вручную после installer-а `3x-ui`
+
+1. Завершить мастер installer-а `3x-ui`.
+2. Создать и настроить `Reality` inbound внутри панели.
+3. Выпустить клиентские ссылки или подписки уже средствами `3x-ui`.
+4. Если панель использует отдельный порт, открыть его в `UFW` вручную.
 
 ### Удаление
 
@@ -99,59 +70,39 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 
 ### Важные заметки
 
-- Ссылки, пароли и QR-коды сохраняются в `/root/.vpn-credentials`.
-- Дефолтная `VLESS` ссылка печатается самим `setup.sh` после генерации Reality-ключей.
-- `Hysteria2` не входит в автоматический inbound-путь этого репозитория. Если нужен именно он, добавляй его отдельно, вне базового сценария.
+- Источник истины по логике установки: `src/setup`, а не собранный `setup.sh`.
+- Публичный `setup.sh` собирается через [`tools/build-setup.ps1`](tools/build-setup.ps1).
+- Порядок и назначение модулей описаны в [`src/setup/README.md`](src/setup/README.md).
 - После первой установки нужен `sudo reboot`.
 
 ---
 
 ## <span id="english"></span>🇺🇸 English
 
-This repo turns a clean VPS into a three-part stack:
-- AmneziaWG for VPN access.
-- Xray Reality on port `443`.
-- AdGuardHome for DNS filtering and SafeSearch.
-- An optional `VLESS Reality` cascade upstream for AdGuardHome DNS egress, while AWG traffic stays direct.
+### Current project scope
 
-### Topology
+- Runs the official interactive `3x-ui` installer.
+- Does not perform silent install and does not auto-configure `3x-ui`.
+- Brings up `AmneziaWG` and `AdGuardHome` as the direct stack for the current stage.
+- Stores `AWG` and `AdGuardHome` credentials in `/root/.vpn-credentials`.
+- Keeps port `443` reserved for `Reality`, but the inbound and client links are configured manually by the operator inside `3x-ui`.
 
-```mermaid
-graph TD
-    User([Devices])
+### Stage-3 limitations
 
-    subgraph VPS [VPS Server]
-        AWG[AmneziaWG]
-        XR[Xray Reality]
-        AGH[AdGuardHome]
-
-        AWG -->|Direct NAT| Net((Internet))
-        AWG -.->|DNS DNAT 53| AGH
-        XR -.->|Remote DNS| AGH
-    end
-
-    XR -->|VLESS / Reality| Net((Internet))
-    AGH -->|DoH / DoT / UDP| DNS((Public DNS))
-
-    User -->|UDP| AWG
-    User -->|TCP 443| XR
-    User -->|Web UI / DNS| AGH
-```
+- Only `--mode target` is supported.
+- `--mode relay` intentionally exits before service setup with a clear fail-fast error.
+- `setup.sh` no longer stores or generates the legacy `Xray/cascade` config, `CASCADE_*`, `VLESS_LINK`, or `ADG_HTTP_PROXY_PORT`.
 
 ### What `setup.sh` does
 
-- Installs `Xray-core 25.1.30` using the official installer and keeps that pinned version on re-runs.
-- Writes the config to `/usr/local/etc/xray/config.json`.
-- The public `setup.sh` is assembled from modules under `src/setup/` by [`tools/build-setup.ps1`](tools/build-setup.ps1); `src/setup/README.md` documents the module order and responsibilities.
-- Removes legacy `x-ui` leftovers on re-runs so the host keeps a single Xray control plane.
-- Creates a `VLESS + Reality + Vision` inbound on port `443`.
-- AWG clients exit directly through MASQUERADE, without Xray/TProxy in the dataplane.
-- Optionally enables cascade mode through `--cascade-vless`, where AdGuardHome DNS egress can use an upstream `VLESS Reality` exit and the upstream hostname is resolved to an IP during install to avoid DNS loops.
-- Proxies AdGuardHome upstream DNS through a local Xray HTTP proxy and DoH.
-- Prints a `vless://` link.
-- Sets up AmneziaWG direct egress, DNS DNAT, and AdGuardHome.
-- Ships the AmneziaWG client profile as IPv4-only (`AllowedIPs = 0.0.0.0/0`) until IPv6 routing is implemented intentionally.
-- Enables baseline hardening: `UFW`, `Fail2Ban`, `BBR`, `sysctl`, SSH on `2244`.
+- Updates the base OS and installs required packages.
+- Prepares `sysctl`, `BBR`, `swapfile`, `UFW`, `Fail2Ban`, and SSH on `2244`.
+- Builds and configures `AmneziaWG`.
+- Installs and configures `AdGuardHome` without any `Xray` HTTP proxy dependency.
+- Launches the official `3x-ui` installer through `/dev/tty` so the operator completes the interactive flow manually.
+- Prints a handoff after the installer: panel setup, `Reality` inbound creation, and client link generation are handled manually outside the script.
+
+The `3x-ui` installer command was verified against the primary sources: [MHSanaei/3x-ui Wiki](https://github.com/MHSanaei/3x-ui/wiki/Installation) and the [MHSanaei/3x-ui repository](https://github.com/MHSanaei/3x-ui).
 
 ### Install
 
@@ -159,26 +110,18 @@ graph TD
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
 ```
 
-### Install with cascade
-
-```bash
-sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | \
-  sudo bash -s -- --cascade-vless 'vless://UUID@host:443?type=tcp&security=reality&encryption=none&pbk=...&sni=...&sid=...'
-```
-
-- `v1` only accepts `vless://` links with `type=tcp`, `security=reality`, and `encryption=none`.
-- `--cascade-mode auto` is the only supported mode and is implied when `--cascade-vless` is present.
-- Cascade no longer affects AWG traffic; it only changes AdGuardHome DNS egress.
-
 ### Re-run with rotation
 
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
-- A re-run without `--rotate` is expected to reuse the current `Xray`, `AdGuardHome`, and `AmneziaWG` credentials instead of replacing the active AWG client profile.
-- A re-run without `--cascade-vless` disables the optional DNS cascade and rewrites the persisted `CASCADE_*` values.
-- If `setup.sh` fails, it now prints the active step always; for unhandled errors it also shows the failing command so AWG-stage issues can be localized without guessing.
+### Manual steps after the `3x-ui` installer
+
+1. Finish the `3x-ui` installer wizard.
+2. Create and configure the `Reality` inbound inside the panel.
+3. Generate client links or subscriptions from `3x-ui`.
+4. If the panel uses a dedicated port, open it in `UFW` manually.
 
 ### Uninstall
 
@@ -188,7 +131,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 
 ### Notes
 
-- Links, passwords, and QR codes are stored in `/root/.vpn-credentials`.
-- The default `VLESS` link is printed by `setup.sh` after Reality keys are generated.
-- `Hysteria2` is not part of the automated inbound flow in this repo. If you need it, add it separately outside the default path.
+- The source of truth for installer logic is `src/setup`, not the assembled `setup.sh`.
+- The public `setup.sh` is built through [`tools/build-setup.ps1`](tools/build-setup.ps1).
+- Module order and responsibilities are documented in [`src/setup/README.md`](src/setup/README.md).
 - A `sudo reboot` is required after the first install.

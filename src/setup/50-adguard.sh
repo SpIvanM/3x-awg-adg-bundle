@@ -49,7 +49,6 @@ users:
     password: $ADG_HASH
 auth_attempts: 5
 block_auth_min: 15
-http_proxy: "http://127.0.0.1:$ADG_HTTP_PROXY_PORT/"
 language: ru
 theme: auto
 dns:
@@ -134,19 +133,4 @@ if ss -ulnp | grep ":${ADG_DNS_PORT} " > /dev/null 2>&1; then
     log "AdGuardHome DNS (порт ${ADG_DNS_PORT}) слушает — OK"
 else
     warn "AdGuardHome НЕ слушает на порту ${ADG_DNS_PORT}! Проверьте: journalctl -u ${AGH_SVC_NAME} -n 50"
-fi
-
-# Пишем прямой конфиг Xray после того, как известен финальный DNS-порт AGH.
-mark_step "Xray: write direct config after AdGuardHome"
-log "Запись прямого конфига Xray..."
-write_xray_config
-xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
-log "Перезапуск xray для применения конфигурации..."
-systemctl restart xray
-# Ждём поднятия Xray на порту 443
-for _i in $(seq 1 15); do ss -tlnp | grep ':443 ' > /dev/null 2>&1 && break; sleep 1; done
-if ss -tlnp | grep ':443 ' > /dev/null 2>&1; then
-    log "Xray Reality (порт 443) слушает — OK"
-else
-    err "Xray НЕ слушает на порту 443! Проверьте: journalctl -u xray -n 50"
 fi

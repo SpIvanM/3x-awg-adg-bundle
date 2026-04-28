@@ -62,72 +62,16 @@ EOF
 sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || true
 
 # ==============================================================================
-# 2. УСТАНОВКА XRAY
+# 2. ПОДГОТОВКА ОБЩИХ ПАРАМЕТРОВ УСТАНОВКИ
 # ==============================================================================
-mark_step "System: Xray bootstrap"
-log "Проверка и установка Xray-core..."
+mark_step "System: prepare runtime context"
+log "Подготовка общих сетевых параметров..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-XRAY_PORT=443
 
-# Загружаем или генерируем новые credentials Xray
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
-    log "Загрузка существующих credentials Xray из $CREDS_FILE..."
-    XRAY_UUID=$(read_cred_value "XRAY_UUID" "$CREDS_FILE")
-    XRAY_PRIVATE_KEY=$(read_cred_value "XRAY_PRIVATE_KEY" "$CREDS_FILE")
-    XRAY_PUBLIC_KEY=$(read_cred_value "XRAY_PUBLIC_KEY" "$CREDS_FILE")
-    XRAY_SHORT_ID=$(read_cred_value "XRAY_SHORT_ID" "$CREDS_FILE")
+    log "Загрузка существующего DNS порта AdGuardHome из $CREDS_FILE..."
     ADG_DNS_PORT=$(read_cred_value "ADG_DNS_PORT" "$CREDS_FILE")
-    ADG_HTTP_PROXY_PORT=$(read_cred_value "ADG_HTTP_PROXY_PORT" "$CREDS_FILE")
-    CASCADE_ENABLED=$(read_cred_value "CASCADE_ENABLED" "$CREDS_FILE")
-    CASCADE_MODE=$(read_cred_value "CASCADE_MODE" "$CREDS_FILE")
-    CASCADE_VLESS=$(read_cred_value "CASCADE_VLESS" "$CREDS_FILE")
-    CASCADE_ADDRESS=$(read_cred_value "CASCADE_ADDRESS" "$CREDS_FILE")
-    CASCADE_PORT=$(read_cred_value "CASCADE_PORT" "$CREDS_FILE")
-    CASCADE_UUID=$(read_cred_value "CASCADE_UUID" "$CREDS_FILE")
-    CASCADE_FLOW=$(read_cred_value "CASCADE_FLOW" "$CREDS_FILE")
-    CASCADE_PBK=$(read_cred_value "CASCADE_PBK" "$CREDS_FILE")
-    CASCADE_SNI=$(read_cred_value "CASCADE_SNI" "$CREDS_FILE")
-    CASCADE_SID=$(read_cred_value "CASCADE_SID" "$CREDS_FILE")
-    CASCADE_FP=$(read_cred_value "CASCADE_FP" "$CREDS_FILE")
-    CASCADE_SPX=$(read_cred_value "CASCADE_SPX" "$CREDS_FILE")
-    FINAL_MODE=$(read_cred_value "FINAL_MODE" "$CREDS_FILE")
 fi
 
-# Generate or restore Reality keys only after Xray is present and the binary is resolved.
-mark_step "System: load Xray credentials"
-# Если после загрузки переменные пустые, генерируем заново
-[ -z "$XRAY_UUID" ] && XRAY_UUID=$(cat /proc/sys/kernel/random/uuid)
-[ -z "$XRAY_SHORT_ID" ] && XRAY_SHORT_ID=$(openssl rand -hex 8)
-
-# Prepare the AdGuard DNS listener port early so Xray can point to the final value.
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
-[ -z "$ADG_HTTP_PROXY_PORT" ] && ADG_HTTP_PROXY_PORT=$(shuf -i 10000-65000 -n 1)
-
-if systemctl is-active --quiet xray 2>/dev/null && [ -x /usr/local/bin/xray ]; then
-    warn "Xray уже установлен и работает. Перегенерируем конфиг."
-else
-    install_xray_core
-    # Ждём появления бинарника Xray (до 10 секунд)
-    for i in $(seq 1 10); do command -v xray >/dev/null 2>&1 && break; sleep 1; done
-    command -v xray >/dev/null 2>&1 || err "Бинарный файл xray не найден после установки"
-fi
-
-XRAY_BIN="$(resolve_xray_bin || true)"
-[ -n "$XRAY_BIN" ] || err "Бинарный файл xray не найден после установки."
-
-mark_step "System: derive Reality keys"
-if [ -n "$XRAY_PRIVATE_KEY" ] && [ -z "$XRAY_PUBLIC_KEY" ]; then
-    log "В credentials Xray найден private key Reality, восстанавливаем public key..."
-    DERIVED_OUTPUT="$("$XRAY_BIN" x25519 -i "$XRAY_PRIVATE_KEY" 2>&1 || true)"
-    XRAY_PUBLIC_KEY=$(printf '%s\n' "$(_parse_x25519_output "$DERIVED_OUTPUT")" | sed -n '2p')
-fi
-
-if [ -z "$XRAY_PRIVATE_KEY" ] || [ -z "$XRAY_PUBLIC_KEY" ]; then
-    log "Генерация Reality credentials Xray..."
-    generate_reality_keys
-fi
-
-[ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
-[ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality."
-[ -n "$XRAY_SHORT_ID" ] || err "Не удалось сгенерировать shortId Reality."

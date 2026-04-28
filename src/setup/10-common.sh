@@ -32,13 +32,10 @@ trim_cr_value() {
 validate_stack() {
     local agh_service_name="$1"
 
-    log "Валидация Xray, AmneziaWG и AdGuardHome..."
-    xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
-    systemctl restart xray || err "Не удалось перезапустить xray."
+    log "Валидация AmneziaWG и AdGuardHome..."
     systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0 после настройки."
     systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
 
-    ss -lntup | grep -Eq ':443 ' || err "Xray не слушает порт 443."
     ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."

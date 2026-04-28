@@ -15,7 +15,7 @@
 #   - src/setup/60-firewall.sh
 #   - src/setup/70-output.sh
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [--mode target|relay] [-r | --rotate]
-# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard Home, prepares 3x-ui installation command. In relay mode additionally configures L4 port forwarding to the target VPS.
+# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard Home, and launches the official interactive 3x-ui installer. Relay mode is intentionally stopped early until the next stage.
 # Returns: Configured VPN stack with connection details.
 # Fails: If run without root privileges or with an invalid --mode value.
 # ==============================================================================
@@ -27,13 +27,14 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.1"
-XRAY_VERSION_PIN="25.1.30"
+SCRIPT_VERSION="3.0.2"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
 DEPLOY_MODE="target"
 CURRENT_STEP="bootstrap"
+REALITY_PORT="443"
+THREE_X_UI_INSTALLER_URL="https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh"
 
 mark_step() {
     CURRENT_STEP="$1"
@@ -139,13 +140,10 @@ trim_cr_value() {
 validate_stack() {
     local agh_service_name="$1"
 
-    log "Валидация Xray, AmneziaWG и AdGuardHome..."
-    xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
-    systemctl restart xray || err "Не удалось перезапустить xray."
+    log "Валидация AmneziaWG и AdGuardHome..."
     systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0 после настройки."
     systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
 
-    ss -lntup | grep -Eq ':443 ' || err "Xray не слушает порт 443."
     ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
@@ -265,461 +263,28 @@ cleanup_legacy_adguard_units() {
     systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
-install_xray_core() {
-    local current_xray_version=""
-
-    if command -v xray >/dev/null 2>&1; then
-        current_xray_version=$(xray version 2>/dev/null | awk 'NR==1 {print $2}')
-    fi
-
-    if [ "$current_xray_version" = "$XRAY_VERSION_PIN" ] && systemctl list-unit-files 2>/dev/null | grep -q '^xray\.service'; then
-        systemctl enable xray >/dev/null 2>&1 || true
-        return 0
-    fi
-
-    if [ -n "$current_xray_version" ] && [ "$current_xray_version" != "$XRAY_VERSION_PIN" ]; then
-        warn "Обнаружен Xray ${current_xray_version}. Переключаемся на pinned-версию ${XRAY_VERSION_PIN} из-за регрессии TProxy/TCP в более новых релизах."
-    else
-        log "Установка Xray-core ${XRAY_VERSION_PIN} через официальный инсталлятор..."
-    fi
-
-    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version "$XRAY_VERSION_PIN"
-    systemctl daemon-reload
-    systemctl enable xray >/dev/null 2>&1 || true
-}
-
-resolve_xray_bin() {
-    command -v xray 2>/dev/null || true
-}
-
-_parse_x25519_output() {
-    local raw
-    raw=$(printf '%s' "$1" | tr -d '\r')
-    local priv pub
-    priv=$(printf '%s\n' "$raw" | sed -nE 's|^PrivateKey:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
-    pub=$(printf '%s\n' "$raw" | sed -nE 's|^Password \(PublicKey\):[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
-    [ -n "$priv" ] || priv=$(printf '%s\n' "$raw" | sed -nE 's|^Private key:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
-    [ -n "$pub" ] || pub=$(printf '%s\n' "$raw" | sed -nE 's|^Public key:[[:space:]]*([A-Za-z0-9+/=_-]+).*|\1|p' | head -n1)
-    printf '%s\n%s' "$priv" "$pub"
-}
-
-generate_reality_keys() {
-    local raw_output priv_pub
-
-    raw_output="$("$XRAY_BIN" x25519 2>&1 || true)"
-    priv_pub=$(_parse_x25519_output "$raw_output")
-    XRAY_PRIVATE_KEY=$(printf '%s\n' "$priv_pub" | sed -n '1p')
-    XRAY_PUBLIC_KEY=$(printf '%s\n' "$priv_pub" | sed -n '2p')
-
-    if [ -n "$XRAY_PRIVATE_KEY" ] && [ -n "$XRAY_PUBLIC_KEY" ]; then
-        return 0
-    fi
-
-    warn "xray x25519 вернул нераспознанный вывод. Пробуем openssl-fallback."
-    warn "Сырой вывод: $(printf '%s' "$raw_output" | head -c 400)"
-    local fallback_priv fallback_out fallback_pub
-    fallback_priv=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
-    fallback_out="$("$XRAY_BIN" x25519 -i "$fallback_priv" 2>&1 || true)"
-    fallback_pub=$(printf '%s\n' "$(_parse_x25519_output "$fallback_out")" | sed -n '2p')
-    XRAY_PRIVATE_KEY="$fallback_priv"
-    XRAY_PUBLIC_KEY="$fallback_pub"
-
-    [ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
-    [ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality. Вывод xray: $(printf '%s' "$fallback_out" | head -c 400)"
-}
-
 remove_legacy_xui() {
-    systemctl stop x-ui 2>/dev/null || true
-    systemctl disable x-ui 2>/dev/null || true
-    rm -f /etc/systemd/system/x-ui.service
-    rm -rf /usr/local/x-ui /etc/x-ui
+    systemctl stop xray 2>/dev/null || true
+    systemctl disable xray 2>/dev/null || true
+    rm -f /usr/local/etc/xray/config.json
+    rm -f /etc/systemd/system/xray.service /lib/systemd/system/xray.service
     systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
-write_xray_config() {
-    mkdir -p /usr/local/etc/xray
+install_3x_ui_interactive() {
+    [ -c /dev/tty ] || err "Для интерактивной установки 3x-ui требуется /dev/tty."
 
-    SERVER_IP="$SERVER_IP" \
-    XRAY_PORT="$XRAY_PORT" \
-    XRAY_UUID="$XRAY_UUID" \
-    XRAY_PRIVATE_KEY="$XRAY_PRIVATE_KEY" \
-    XRAY_SHORT_ID="$XRAY_SHORT_ID" \
-    ADG_DNS_PORT="$ADG_DNS_PORT" \
-    ADG_HTTP_PROXY_PORT="$ADG_HTTP_PROXY_PORT" \
-    CASCADE_ENABLED="$CASCADE_ENABLED" \
-    CASCADE_ADDRESS="$CASCADE_ADDRESS" \
-    CASCADE_ADDRESS_IP="$CASCADE_ADDRESS_IP" \
-    CASCADE_PORT="$CASCADE_PORT" \
-    CASCADE_UUID="$CASCADE_UUID" \
-    CASCADE_FLOW="$CASCADE_FLOW" \
-    CASCADE_PBK="$CASCADE_PBK" \
-    CASCADE_SNI="$CASCADE_SNI" \
-    CASCADE_SID="$CASCADE_SID" \
-    CASCADE_FP="$CASCADE_FP" \
-    CASCADE_SPX="$CASCADE_SPX" \
-    python3 - <<'PY' > /usr/local/etc/xray/config.json
-import json
-import os
-import sys
-
-server_ip = os.environ["SERVER_IP"]
-cascade_enabled = os.environ.get("CASCADE_ENABLED", "0") == "1"
-cascade_address_ip = os.environ.get("CASCADE_ADDRESS_IP") or os.environ["CASCADE_ADDRESS"]
-
-direct_outbound = {
-    "tag": "direct-out",
-    "protocol": "freedom",
-    "settings": {
-        "domainStrategy": "UseIPv4",
-    },
-    "streamSettings": {
-        "sockopt": {
-            "mark": 2,
-        },
-    },
-}
-
-block_outbound = {
-    "tag": "block-out",
-    "protocol": "blackhole",
-}
-
-adg_http_proxy_rule = {
-    "type": "field",
-    "ruleTag": "adg-http-proxy",
-    "inboundTag": ["adg-http-proxy-in"],
-    "outboundTag": "direct-out",
-}
-
-config = {
-    "log": {
-        "access": "none",
-        "dnsLog": False,
-        "error": "",
-        "loglevel": "warning",
-        "maskAddress": "",
-    },
-    "dns": {
-        "servers": [
-            f"udp://127.0.0.1:{os.environ['ADG_DNS_PORT']}",
-        ],
-        "queryStrategy": "UseIPv4",
-    },
-    "inbounds": [
-        {
-            "tag": "reality-in",
-            "listen": "0.0.0.0",
-            "port": int(os.environ["XRAY_PORT"]),
-            "protocol": "vless",
-            "settings": {
-                "clients": [
-                    {
-                        "email": "reality-default",
-                        "flow": "xtls-rprx-vision",
-                        "id": os.environ["XRAY_UUID"],
-                    }
-                ],
-                "decryption": "none",
-            },
-            "sniffing": {
-                "enabled": True,
-                "destOverride": ["http", "tls", "quic", "fakedns"],
-                "metadataOnly": True,
-                "routeOnly": True,
-            },
-            "streamSettings": {
-                "network": "tcp",
-                "security": "reality",
-                "realitySettings": {
-                    "dest": "google.com:443",
-                    "privateKey": os.environ["XRAY_PRIVATE_KEY"],
-                    "serverNames": ["google.com", "www.google.com"],
-                    "shortIds": [os.environ["XRAY_SHORT_ID"]],
-                    "show": False,
-                    "xver": 0,
-                },
-                "tcpSettings": {
-                    "header": {
-                        "type": "none",
-                    },
-                },
-            },
-        },
-        {
-            "tag": "adg-http-proxy-in",
-            "listen": "127.0.0.1",
-            "port": int(os.environ["ADG_HTTP_PROXY_PORT"]),
-            "protocol": "http",
-            "settings": {
-                "allowTransparent": False,
-            },
-        },
-    ],
-    "outbounds": [
-        direct_outbound,
-        block_outbound,
-    ],
-    "routing": {
-        "domainStrategy": "IPIfNonMatch",
-        "rules": [
-            {
-                "type": "field",
-                "ruleTag": "ru-domains",
-                "domain": [
-                    "regexp:\\.ru$",
-                    "regexp:\\.su$",
-                    "regexp:\\.xn--p1ai$",
-                ],
-                "outboundTag": "direct-out",
-            },
-            {
-                "type": "field",
-                "ruleTag": "ru-ips",
-                "ip": [
-                    "geoip:ru",
-                    "geoip:private",
-                ],
-                "outboundTag": "direct-out",
-            },
-            {
-                "type": "field",
-                "ruleTag": "entry-server-self",
-                "ip": [
-                    "127.0.0.0/8",
-                    "10.0.0.0/8",
-                    "100.64.0.0/10",
-                    "169.254.0.0/16",
-                    "172.16.0.0/12",
-                    "192.168.0.0/16",
-                    f"{server_ip}/32",
-                ],
-                "outboundTag": "direct-out",
-            },
-            {
-                "type": "field",
-                "ruleTag": "reality-server-egress",
-                "inboundTag": ["reality-in"],
-                "outboundTag": "direct-out",
-            },
-            adg_http_proxy_rule,
-            {
-                "type": "field",
-                "ruleTag": "block-bittorrent",
-                "protocol": ["bittorrent"],
-                "outboundTag": "block-out",
-            },
-        ],
-    },
-}
-
-if cascade_enabled:
-    exit_us_outbound = {
-        "tag": "exit-us",
-        "protocol": "vless",
-        "settings": {
-            "vnext": [
-                {
-                    "address": cascade_address_ip,
-                    "port": int(os.environ["CASCADE_PORT"]),
-                    "users": [
-                        {
-                            "id": os.environ["CASCADE_UUID"],
-                            "encryption": "none",
-                            "flow": os.environ["CASCADE_FLOW"],
-                        }
-                    ],
-                }
-            ]
-        },
-        "streamSettings": {
-            "network": "tcp",
-            "security": "reality",
-            "realitySettings": {
-                "serverName": os.environ["CASCADE_SNI"],
-                "publicKey": os.environ["CASCADE_PBK"],
-                "shortId": os.environ["CASCADE_SID"],
-                "fingerprint": os.environ["CASCADE_FP"],
-                "spiderX": os.environ["CASCADE_SPX"],
-            },
-            "sockopt": {
-                "mark": 2,
-            },
-        },
-    }
-    config["outbounds"].append(exit_us_outbound)
-    adg_http_proxy_rule["outboundTag"] = "exit-us"
-
-json.dump(config, sys.stdout, indent=2)
-sys.stdout.write("\n")
-PY
-}
-
-reset_cascade_state() {
-    CASCADE_ENABLED=0
-    CASCADE_MODE=""
-    CASCADE_VLESS=""
-    CASCADE_ADDRESS=""
-    CASCADE_ADDRESS_IP=""
-    CASCADE_PORT=""
-    CASCADE_UUID=""
-    CASCADE_FLOW=""
-    CASCADE_PBK=""
-    CASCADE_SNI=""
-    CASCADE_SID=""
-    CASCADE_FP=""
-    CASCADE_SPX=""
-    FINAL_MODE="direct"
-}
-
-parse_cascade_vless_uri() {
-    local parser_output parser_status
-
-    [ -n "$CASCADE_VLESS" ] || err "Пустой --cascade-vless. Передайте полный vless:// URI."
-
-    set +e
-    parser_output=$(
-        CASCADE_VLESS_INPUT="$CASCADE_VLESS" python3 - <<'PY' 2>&1
-from urllib.parse import parse_qs, unquote, urlparse
-import os
-
-uri = os.environ.get("CASCADE_VLESS_INPUT", "").strip()
-if not uri:
-    raise SystemExit("Missing cascade VLESS URI.")
-
-try:
-    u = urlparse(uri)
-except ValueError as exc:
-    raise SystemExit(f"Invalid VLESS URI: {exc}")
-
-if u.scheme != "vless":
-    raise SystemExit("Unsupported scheme: expected vless")
-
-uuid = unquote(u.username or "")
-host = u.hostname or ""
-if not uuid:
-    raise SystemExit("Missing VLESS user UUID.")
-if not host:
-    raise SystemExit("Missing VLESS upstream host.")
-
-try:
-    port = u.port or 443
-except ValueError as exc:
-    raise SystemExit(f"Invalid VLESS port: {exc}")
-
-q = {k: v[-1] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
-required = ["security", "type", "encryption", "pbk", "sni", "sid"]
-for key in required:
-    if key not in q or not q[key]:
-        raise SystemExit(f"Missing required VLESS query field: {key}")
-
-if q.get("security") != "reality":
-    raise SystemExit("Only security=reality is supported in v1")
-if q.get("type") != "tcp":
-    raise SystemExit("Only type=tcp is supported in v1")
-if q.get("encryption") != "none":
-    raise SystemExit("Only encryption=none is supported in v1")
-
-flow = q.get("flow", "xtls-rprx-vision") or "xtls-rprx-vision"
-fp = q.get("fp", "chrome") or "chrome"
-spx = unquote(q.get("spx", "/") or "/")
-
-print(host)
-print(port)
-print(uuid)
-print(flow)
-print(q["pbk"])
-print(q["sni"])
-print(q["sid"])
-print(fp)
-print(spx)
-PY
-    )
-    parser_status=$?
-    set -e
-
-    [ "$parser_status" -eq 0 ] || err "Не удалось разобрать --cascade-vless: $parser_output"
-
-    CASCADE_ADDRESS=$(printf '%s\n' "$parser_output" | sed -n '1p')
-    CASCADE_PORT=$(printf '%s\n' "$parser_output" | sed -n '2p')
-    CASCADE_UUID=$(printf '%s\n' "$parser_output" | sed -n '3p')
-    CASCADE_FLOW=$(printf '%s\n' "$parser_output" | sed -n '4p')
-    CASCADE_PBK=$(printf '%s\n' "$parser_output" | sed -n '5p')
-    CASCADE_SNI=$(printf '%s\n' "$parser_output" | sed -n '6p')
-    CASCADE_SID=$(printf '%s\n' "$parser_output" | sed -n '7p')
-    CASCADE_FP=$(printf '%s\n' "$parser_output" | sed -n '8p')
-    CASCADE_SPX=$(printf '%s\n' "$parser_output" | sed -n '9p')
-
-    [ -n "$CASCADE_ADDRESS" ] || err "Cascade parser returned an empty host."
-    [ -n "$CASCADE_PORT" ] || err "Cascade parser returned an empty port."
-    [ -n "$CASCADE_UUID" ] || err "Cascade parser returned an empty UUID."
-    [ -n "$CASCADE_PBK" ] || err "Cascade parser returned an empty Reality public key."
-    [ -n "$CASCADE_SNI" ] || err "Cascade parser returned an empty SNI."
-    [ -n "$CASCADE_SID" ] || err "Cascade parser returned an empty shortId."
-}
-
-resolve_cascade_upstream_address() {
-    local resolver_output resolver_status
-
-    [ -n "$CASCADE_ADDRESS" ] || err "Cascade parser returned an empty host."
-
-    set +e
-    resolver_output=$(
-        CASCADE_ADDRESS_INPUT="$CASCADE_ADDRESS" python3 - <<'PY' 2>&1
-from ipaddress import ip_address
-from socket import AF_INET, AF_INET6, getaddrinfo
-import os
-
-host = os.environ.get("CASCADE_ADDRESS_INPUT", "").strip()
-if not host:
-    raise SystemExit("Missing cascade upstream host.")
-
-try:
-    ip_address(host)
-except ValueError:
-    infos = getaddrinfo(host, None)
-    ipv4 = next((info[4][0] for info in infos if info[0] == AF_INET), "")
-    ipv6 = next((info[4][0] for info in infos if info[0] == AF_INET6), "")
-    resolved = ipv4 or ipv6
-    if not resolved:
-        raise SystemExit(f"Unable to resolve cascade upstream host: {host}")
-    print(resolved)
-else:
-    print(host)
-PY
-    )
-    resolver_status=$?
-    set -e
-
-    [ "$resolver_status" -eq 0 ] || err "Не удалось определить IP каскадного upstream: $resolver_output"
-
-    CASCADE_ADDRESS_IP=$(printf '%s\n' "$resolver_output" | sed -n '1p')
-    [ -n "$CASCADE_ADDRESS_IP" ] || err "Resolved cascade upstream IP is empty."
-
-    if [ "$CASCADE_ADDRESS" != "$CASCADE_ADDRESS_IP" ]; then
-        log "Cascade upstream ${CASCADE_ADDRESS} resolved to ${CASCADE_ADDRESS_IP} for outbound use."
-    fi
-}
-
-configure_cascade_mode() {
-    if [ -n "$CASCADE_MODE_ARG" ] && [ "$CASCADE_MODE_ARG" != "auto" ]; then
-        err "Only --cascade-mode auto is supported in v1."
+    log "Запуск официального интерактивного installer 3x-ui..."
+    if ! bash <(curl -fsSL "$THREE_X_UI_INSTALLER_URL") </dev/tty >/dev/tty 2>/dev/tty; then
+        err "Официальный installer 3x-ui завершился с ошибкой."
     fi
 
-    reset_cascade_state
-
-    if [ -n "$CASCADE_VLESS_ARG" ]; then
-        CASCADE_VLESS="$CASCADE_VLESS_ARG"
-        CASCADE_MODE="${CASCADE_MODE_ARG:-auto}"
-        parse_cascade_vless_uri
-        resolve_cascade_upstream_address
-        CASCADE_ENABLED=1
-        FINAL_MODE="direct"
-        log "Cascade mode теперь влияет только на DNS-выход AdGuardHome; AWG-трафик остаётся direct."
-        return 0
-    fi
-
-    [ -z "$CASCADE_MODE_ARG" ] || err "--cascade-mode requires --cascade-vless."
+    log "3x-ui requires manual interactive configuration after the installer finishes."
+    warn "Дальнейшая настройка 3x-ui, Reality inbound и панели выполняется вручную вне setup.sh."
+    warn "Скрипт намеренно не делает silent install и не меняет конфигурацию 3x-ui автоматически."
 }
+
+# Reserved for relay port-forwarding helpers in the next stages.
 
 # ==============================================================================
 # 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
@@ -785,91 +350,34 @@ EOF
 sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || true
 
 # ==============================================================================
-# 2. УСТАНОВКА XRAY
+# 2. ПОДГОТОВКА ОБЩИХ ПАРАМЕТРОВ УСТАНОВКИ
 # ==============================================================================
-mark_step "System: Xray bootstrap"
-log "Проверка и установка Xray-core..."
+mark_step "System: prepare runtime context"
+log "Подготовка общих сетевых параметров..."
 SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
 PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-XRAY_PORT=443
 
-# Загружаем или генерируем новые credentials Xray
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
-    log "Загрузка существующих credentials Xray из $CREDS_FILE..."
-    XRAY_UUID=$(read_cred_value "XRAY_UUID" "$CREDS_FILE")
-    XRAY_PRIVATE_KEY=$(read_cred_value "XRAY_PRIVATE_KEY" "$CREDS_FILE")
-    XRAY_PUBLIC_KEY=$(read_cred_value "XRAY_PUBLIC_KEY" "$CREDS_FILE")
-    XRAY_SHORT_ID=$(read_cred_value "XRAY_SHORT_ID" "$CREDS_FILE")
+    log "Загрузка существующего DNS порта AdGuardHome из $CREDS_FILE..."
     ADG_DNS_PORT=$(read_cred_value "ADG_DNS_PORT" "$CREDS_FILE")
-    ADG_HTTP_PROXY_PORT=$(read_cred_value "ADG_HTTP_PROXY_PORT" "$CREDS_FILE")
-    CASCADE_ENABLED=$(read_cred_value "CASCADE_ENABLED" "$CREDS_FILE")
-    CASCADE_MODE=$(read_cred_value "CASCADE_MODE" "$CREDS_FILE")
-    CASCADE_VLESS=$(read_cred_value "CASCADE_VLESS" "$CREDS_FILE")
-    CASCADE_ADDRESS=$(read_cred_value "CASCADE_ADDRESS" "$CREDS_FILE")
-    CASCADE_PORT=$(read_cred_value "CASCADE_PORT" "$CREDS_FILE")
-    CASCADE_UUID=$(read_cred_value "CASCADE_UUID" "$CREDS_FILE")
-    CASCADE_FLOW=$(read_cred_value "CASCADE_FLOW" "$CREDS_FILE")
-    CASCADE_PBK=$(read_cred_value "CASCADE_PBK" "$CREDS_FILE")
-    CASCADE_SNI=$(read_cred_value "CASCADE_SNI" "$CREDS_FILE")
-    CASCADE_SID=$(read_cred_value "CASCADE_SID" "$CREDS_FILE")
-    CASCADE_FP=$(read_cred_value "CASCADE_FP" "$CREDS_FILE")
-    CASCADE_SPX=$(read_cred_value "CASCADE_SPX" "$CREDS_FILE")
-    FINAL_MODE=$(read_cred_value "FINAL_MODE" "$CREDS_FILE")
 fi
 
-# Generate or restore Reality keys only after Xray is present and the binary is resolved.
-mark_step "System: load Xray credentials"
-# Если после загрузки переменные пустые, генерируем заново
-[ -z "$XRAY_UUID" ] && XRAY_UUID=$(cat /proc/sys/kernel/random/uuid)
-[ -z "$XRAY_SHORT_ID" ] && XRAY_SHORT_ID=$(openssl rand -hex 8)
-
-# Prepare the AdGuard DNS listener port early so Xray can point to the final value.
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
-[ -z "$ADG_HTTP_PROXY_PORT" ] && ADG_HTTP_PROXY_PORT=$(shuf -i 10000-65000 -n 1)
-
-if systemctl is-active --quiet xray 2>/dev/null && [ -x /usr/local/bin/xray ]; then
-    warn "Xray уже установлен и работает. Перегенерируем конфиг."
-else
-    install_xray_core
-    # Ждём появления бинарника Xray (до 10 секунд)
-    for i in $(seq 1 10); do command -v xray >/dev/null 2>&1 && break; sleep 1; done
-    command -v xray >/dev/null 2>&1 || err "Бинарный файл xray не найден после установки"
-fi
-
-XRAY_BIN="$(resolve_xray_bin || true)"
-[ -n "$XRAY_BIN" ] || err "Бинарный файл xray не найден после установки."
-
-mark_step "System: derive Reality keys"
-if [ -n "$XRAY_PRIVATE_KEY" ] && [ -z "$XRAY_PUBLIC_KEY" ]; then
-    log "В credentials Xray найден private key Reality, восстанавливаем public key..."
-    DERIVED_OUTPUT="$("$XRAY_BIN" x25519 -i "$XRAY_PRIVATE_KEY" 2>&1 || true)"
-    XRAY_PUBLIC_KEY=$(printf '%s\n' "$(_parse_x25519_output "$DERIVED_OUTPUT")" | sed -n '2p')
-fi
-
-if [ -z "$XRAY_PRIVATE_KEY" ] || [ -z "$XRAY_PUBLIC_KEY" ]; then
-    log "Генерация Reality credentials Xray..."
-    generate_reality_keys
-fi
-
-[ -n "$XRAY_PRIVATE_KEY" ] || err "Не удалось получить private key Reality."
-[ -n "$XRAY_PUBLIC_KEY" ] || err "Не удалось получить public key Reality."
-[ -n "$XRAY_SHORT_ID" ] || err "Не удалось сгенерировать shortId Reality."
 
 # ==============================================================================
-# 3. ОЧИСТКА LEGACY XRAY CONTROL PLANE
+# 3. РУЧНОЙ HANDOFF ДЛЯ 3X-UI
 # ==============================================================================
-mark_step "Xray: cleanup legacy x-ui and build VLESS link"
-log "Удаление legacy x-ui, если он остался от предыдущих версий..."
+mark_step "3x-ui: guard relay mode"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    err "Режим relay будет реализован на следующем этапе. На этапе 3 он намеренно остановлен до начала настройки сервисов."
+fi
+
+mark_step "3x-ui: cleanup legacy direct Xray artifacts"
+log "Удаление legacy direct Xray-конфига от предыдущих версий..."
 remove_legacy_xui
-configure_cascade_mode
 
-if [ "$CASCADE_ENABLED" -eq 1 ]; then
-    log "Cascade mode включён: upstream Reality exit-us используется только для DNS-выхода AdGuardHome."
-else
-    log "Cascade mode выключен: AWG идёт direct, а DNS upstream AdGuardHome остаётся на локальном Xray HTTP proxy."
-fi
-
-VLESS_LINK="vless://$XRAY_UUID@$SERVER_IP:$XRAY_PORT?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&pbk=$XRAY_PUBLIC_KEY&headerType=none&fp=chrome&spx=%2F&sni=google.com&sid=$XRAY_SHORT_ID#VLESS-Reality-Default"
+mark_step "3x-ui: run official interactive installer"
+install_3x_ui_interactive
 
 # ==============================================================================
 # 5. УСТАНОВКА AMNEZIAWG
@@ -1064,7 +572,6 @@ users:
     password: $ADG_HASH
 auth_attempts: 5
 block_auth_min: 15
-http_proxy: "http://127.0.0.1:$ADG_HTTP_PROXY_PORT/"
 language: ru
 theme: auto
 dns:
@@ -1151,21 +658,6 @@ else
     warn "AdGuardHome НЕ слушает на порту ${ADG_DNS_PORT}! Проверьте: journalctl -u ${AGH_SVC_NAME} -n 50"
 fi
 
-# Пишем прямой конфиг Xray после того, как известен финальный DNS-порт AGH.
-mark_step "Xray: write direct config after AdGuardHome"
-log "Запись прямого конфига Xray..."
-write_xray_config
-xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
-log "Перезапуск xray для применения конфигурации..."
-systemctl restart xray
-# Ждём поднятия Xray на порту 443
-for _i in $(seq 1 15); do ss -tlnp | grep ':443 ' > /dev/null 2>&1 && break; sleep 1; done
-if ss -tlnp | grep ':443 ' > /dev/null 2>&1; then
-    log "Xray Reality (порт 443) слушает — OK"
-else
-    err "Xray НЕ слушает на порту 443! Проверьте: journalctl -u xray -n 50"
-fi
-
 # ==============================================================================
 # 7. НАСТРОЙКА SSH И ФАЕРВОЛА
 # ==============================================================================
@@ -1244,30 +736,13 @@ cat <<CREDS > "$CREDS_FILE"
 # Generated: $(date -Iseconds)
 # ====================================
 SSH_PORT=2244
-XRAY_PORT=443
-XRAY_UUID=${XRAY_UUID}
-XRAY_PRIVATE_KEY=${XRAY_PRIVATE_KEY}
-XRAY_PUBLIC_KEY=${XRAY_PUBLIC_KEY}
-XRAY_SHORT_ID=${XRAY_SHORT_ID}
-VLESS_LINK=${VLESS_LINK}
-CASCADE_ENABLED=${CASCADE_ENABLED}
-CASCADE_MODE=${CASCADE_MODE}
-CASCADE_VLESS=${CASCADE_VLESS}
-CASCADE_ADDRESS=${CASCADE_ADDRESS}
-CASCADE_PORT=${CASCADE_PORT}
-CASCADE_UUID=${CASCADE_UUID}
-CASCADE_FLOW=${CASCADE_FLOW}
-CASCADE_PBK=${CASCADE_PBK}
-CASCADE_SNI=${CASCADE_SNI}
-CASCADE_SID=${CASCADE_SID}
-CASCADE_FP=${CASCADE_FP}
-CASCADE_SPX=${CASCADE_SPX}
-FINAL_MODE=${FINAL_MODE}
+DEPLOY_MODE=${DEPLOY_MODE}
+SERVER_IP=${SERVER_IP}
+REALITY_PORT=${REALITY_PORT}
 ADG_URL=http://${SERVER_IP}:${ADG_PORT}/
 ADG_USER=${ADG_USER}
 ADG_PASS=${ADG_PASS}
 ADG_DNS_PORT=${ADG_DNS_PORT}
-ADG_HTTP_PROXY_PORT=${ADG_HTTP_PROXY_PORT}
 AWG_PORT=${AWG_PORT}
 AWG_SERVER_PRIV=${SERVER_PRIV}
 AWG_CLIENT_PRIV=${CLIENT_PRIV}
@@ -1291,11 +766,12 @@ echo -e "\n=================================================================="
 echo -e "${GREEN}SSH доступ:${RESET}"
 echo -e "Порт: ${YELLOW}2244${RESET}"
 
-echo -e "\n${GREEN}Xray Reality:${RESET}"
-echo -e "Порт: ${YELLOW}443${RESET}"
-echo -e "Конфиг: ${YELLOW}/usr/local/etc/xray/config.json${RESET}"
-echo -e "Дефолтная ссылка VLESS (Reality): ${YELLOW}${VLESS_LINK}${RESET}"
-echo -e "Режим маршрутизации: ${YELLOW}${FINAL_MODE}${RESET}"
+echo -e "\n${GREEN}3x-ui / Reality:${RESET}"
+echo -e "Reality порт зарезервирован: ${YELLOW}${REALITY_PORT}${RESET}"
+echo -e "Официальный installer 3x-ui уже был запущен интерактивно."
+echo -e "Дальнейшая настройка панели, inbound Reality и клиентских ссылок выполняется ${YELLOW}вручную${RESET}."
+echo -e "Если для панели выбран отдельный порт, откройте его в UFW вручную после настройки."
+
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"
 echo -e "DNS реальный порт: ${YELLOW}${ADG_DNS_PORT}${RESET} (клиент видит 10.8.0.1:53 через DNAT)"

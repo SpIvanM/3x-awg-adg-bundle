@@ -15,7 +15,7 @@
 #   - src/setup/60-firewall.sh
 #   - src/setup/70-output.sh
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [--mode target|relay] [-r | --rotate]
-# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard Home, prepares 3x-ui installation command. In relay mode additionally configures L4 port forwarding to the target VPS.
+# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up AdGuard Home, and launches the official interactive 3x-ui installer. Relay mode is intentionally stopped early until the next stage.
 # Returns: Configured VPN stack with connection details.
 # Fails: If run without root privileges or with an invalid --mode value.
 # ==============================================================================
@@ -27,13 +27,14 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.1"
-XRAY_VERSION_PIN="25.1.30"
+SCRIPT_VERSION="3.0.2"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
 DEPLOY_MODE="target"
 CURRENT_STEP="bootstrap"
+REALITY_PORT="443"
+THREE_X_UI_INSTALLER_URL="https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh"
 
 mark_step() {
     CURRENT_STEP="$1"

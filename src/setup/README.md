@@ -23,14 +23,14 @@ Description: Индекс модулей для сборки setup.sh. Этот 
 ## Назначение модулей
 
 - `00-bootstrap.sh` - shebang, глобальные переменные, CLI, логирование, step-aware trap/err, assembled header и базовые инварианты запуска.
-- `10-common.sh` - общие helper-функции: чтение credentials и конфигов, CRLF-нормализация, разбор URL-порта, общий validation-хелпер и управление swapfile.
+- `10-common.sh` - общие helper-функции: чтение credentials и конфигов, CRLF-нормализация, разбор URL-порта, validation AWG/AGH и управление swapfile.
 - `11-awg-helpers.sh` - helper-функции AmneziaWG: fallback на `wg`, подготовка build dependencies, восстановление существующих AWG credentials и cleanup legacy DNS redirect-правил.
 - `12-agh-helpers.sh` - helper-функции AdGuardHome для cleanup legacy systemd units перед перезаписью канонического сервиса.
-- `13-3x-helpers.sh` - helper-функции стека `3x-ui` / Xray Reality: bootstrap Xray-core, разбор и генерация Reality keys, cleanup legacy `x-ui` и запись текущего Xray config.
-- `14-port-forwarding-helpers.sh` - helper-функции будущего relay / port-forwarding слоя; пока здесь изолирована текущая legacy cascade-логика, чтобы следующий сетевой этап не трогал общие и сервисные helper-ы.
-- `20-system.sh` - системная подготовка, `apt`, `sysctl`, swapfile, Xray bootstrap, загрузка credentials и установка `wireguard-tools` для ключевого fallback AWG.
-- `30-xray.sh` - cleanup legacy `x-ui` и построение дефолтной ссылки `VLESS`.
+- `13-3x-helpers.sh` - helper-функции ручного `3x-ui` flow: cleanup legacy direct Xray-артефактов и запуск официального интерактивного installer через `/dev/tty`.
+- `14-port-forwarding-helpers.sh` - зарезервированный модуль под будущий relay / port-forwarding слой; старая каскадная логика удалена из source-кода на этапе 3.
+- `20-system.sh` - системная подготовка, `apt`, `sysctl`, swapfile, определение сетевого контекста и подготовка общего DNS-порта для AdGuardHome и AWG.
+- `30-xray.sh` - ручной handoff `3x-ui`: fail-fast для неподготовленного `relay`, cleanup legacy direct Xray-конфига и запуск официального интерактивного installer.
 - `40-awg.sh` - установка и конфигурация AmneziaWG с direct NAT egress, DNS DNAT к AdGuardHome и явными step-маркерами для ключей, конфига и рестарта, с повторным использованием восстановленных ключей.
-- `50-adguard.sh` - установка и конфигурация AdGuardHome и финальная запись Xray config.
+- `50-adguard.sh` - установка и конфигурация AdGuardHome в direct-режиме, без HTTP proxy и без автоконфигурации `3x-ui`.
 - `60-firewall.sh` - `UFW`, `SSH`, `Fail2Ban` и системная валидация стека.
-- `70-output.sh` - cleanup, сохранение credentials и финальный вывод оператору.
+- `70-output.sh` - cleanup, сохранение credentials и финальный вывод оператору с ручным handoff по `3x-ui`.
