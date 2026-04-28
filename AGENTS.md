@@ -55,8 +55,19 @@ Description: Суть и правила проекта 3x-awg-adg-bundle для 
 ```mermaid
 graph TD
     subgraph Clients ["Устройства Пользователей"]
-        U_Dir["Прямое подкл."]
-        U_Rel["Подкл. через Relay"]
+        subgraph CDir ["Прямое подкл. (Target)"]
+            U_Dir_AWG["AWG Client"]
+            U_Dir_XR["Reality Client"]
+            U_Dir_DNS["DNS Client"]
+        end
+        
+        subgraph CRel ["Подкл. через Relay"]
+            U_Rel_AWG["Relay AWG Client"]
+            U_Rel_XR["Relay Reality Client"]
+            U_Rel_LAWG["Local AWG Client"]
+            U_Rel_LXR["Local 3x Client"]
+            U_Rel_LDNS["Local DNS Client"]
+        end
     end
 
     subgraph RelayVPS ["VPS 1: Relay (Прокси)"]
@@ -81,20 +92,20 @@ graph TD
     Net(("Интернет"))
 
     %% Connections to Target (Direct)
-    U_Dir -->|"UDP (VPN)"| TAWG
-    U_Dir -->|"TCP 443 (Reality)"| TXR
-    U_Dir -->|"DoH/UDP (DNS)"| TAGH
+    U_Dir_AWG -->|"UDP"| TAWG
+    U_Dir_XR -->|"TCP 443"| TXR
+    U_Dir_DNS -->|"DoH/UDP"| TAGH
     
     TAWG -->|"Direct NAT"| Net
     TXR -->|"Direct"| Net
     TAGH -->|"Upstream DNS"| Net
 
     %% Connections to Relay
-    U_Rel -->|"К порту AWG"| PF_AWG
-    U_Rel -->|"К порту Reality"| PF_XR
-    U_Rel -->|"К локальному VPN"| RAWG
-    U_Rel -->|"К локальному Xray"| RXR
-    U_Rel -->|"К локальному DNS"| RAGH
+    U_Rel_AWG -->|"К порту AWG"| PF_AWG
+    U_Rel_XR -->|"К порту Reality"| PF_XR
+    U_Rel_LAWG -->|"К локальному VPN"| RAWG
+    U_Rel_LXR -->|"К локальному Xray"| RXR
+    U_Rel_LDNS -->|"К локальному DNS"| RAGH
 
     PF_AWG -->|"Forward"| TAWG
     PF_XR -->|"Forward"| TXR
