@@ -28,9 +28,8 @@ Description: Суть и правила проекта 3x-awg-adg-bundle для 
 
 ## 3. Логика маршрутизации
 
-- **Traffic Hub**: Весь трафик из AmneziaWG всегда идет в Xray через **TProxy**.
-- **Диспетчеризация**: Xray решает: прямо в интернет (Direct) или в каскад (Remote Proxy).
-- **DNS Hub**: AGH доступен по DoH/DoT/UDP. Работает как Remote DNS для Xray и перехватчик (DNAT 53) для VPN.
+- **Direct Egress**: Трафик из AmneziaWG и Xray уходит в интернет напрямую через MASQUERADE (NAT) без промежуточного TProxy.
+- **DNS Hub**: AGH работает автономно. Клиенты подключаются к нему напрямую (UDP/DoH/DoT). Перехват DNS-трафика (DNAT 53) может использоваться только для принудительного направления в AGH.
 
 ## 4. Безопасность и Жизненный цикл
 
@@ -61,35 +60,46 @@ graph TD
     end
 
     subgraph RelayVPS ["VPS 1: Relay (Прокси)"]
-        PF["Port Forwarding <br/>(iptables/ufw)"]
+        subgraph PF ["Port Forwarding (L4)"]
+            PF_AWG["Forward AWG"]
+            PF_XR["Forward Reality"]
+        end
+        
         subgraph RLoc ["Локальный Стек (Direct)"]
             RAWG["AmneziaWG <br/>(Custom Port)"]
-            RXR["Xray (3x-ui)"]
+            RXR["3x-ui (Xray)"]
             RAGH["AdGuardHome"]
         end
     end
 
     subgraph TargetVPS ["VPS 2: Target (Конечный)"]
         TAWG["AmneziaWG"]
-        TXR["Xray (Reality)"]
+        TXR["3x-ui (Reality)"]
         TAGH["AdGuardHome"]
-        
-        TAWG -->|"TProxy"| TXR
-        TAWG -.->|"DNAT 53"| TAGH
-        TXR -.->|"Remote DNS"| TAGH
     end
 
     Net(("Интернет"))
 
-    %% Connections
-    U_Dir -->|"UDP/TCP"| TAWG
-    U_Rel -->|"К прокси-порту"| PF
-    U_Rel -->|"К локальному VPN"| RAWG
+    %% Connections to Target (Direct)
+    U_Dir -->|"UDP (VPN)"| TAWG
+    U_Dir -->|"TCP 443 (Reality)"| TXR
+    U_Dir -->|"DoH/UDP (DNS)"| TAGH
     
-    PF -->|"Forward"| TAWG
-    PF -->|"Forward"| TXR
+    TAWG -->|"Direct NAT"| Net
+    TXR -->|"Direct"| Net
+    TAGH -->|"Upstream DNS"| Net
+
+    %% Connections to Relay
+    U_Rel -->|"К порту AWG"| PF_AWG
+    U_Rel -->|"К порту Reality"| PF_XR
+    U_Rel -->|"К локальному VPN"| RAWG
+    U_Rel -->|"К локальному Xray"| RXR
+    U_Rel -->|"К локальному DNS"| RAGH
+
+    PF_AWG -->|"Forward"| TAWG
+    PF_XR -->|"Forward"| TXR
     
     RAWG -->|"Direct"| Net
     RXR -->|"Direct"| Net
-    TXR -->|"Direct"| Net
+    RAGH -->|"Direct"| Net
 ```
