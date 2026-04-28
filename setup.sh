@@ -3,7 +3,11 @@
 # Description: Bootstrap layer for the modular 3x-ui + AmneziaWG + AdGuardHome installer.
 # Assembled from source modules:
 #   - src/setup/00-bootstrap.sh
-#   - src/setup/10-helpers.sh
+#   - src/setup/10-common.sh
+#   - src/setup/11-awg-helpers.sh
+#   - src/setup/12-agh-helpers.sh
+#   - src/setup/13-3x-helpers.sh
+#   - src/setup/14-port-forwarding-helpers.sh
 #   - src/setup/20-system.sh
 #   - src/setup/30-xray.sh
 #   - src/setup/40-awg.sh
@@ -23,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.0"
+SCRIPT_VERSION="3.0.1"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -101,42 +105,6 @@ else
     SKIP_APT=0
 fi
 
-install_xray_core() {
-    local current_xray_version=""
-
-    if command -v xray >/dev/null 2>&1; then
-        current_xray_version=$(xray version 2>/dev/null | awk 'NR==1 {print $2}')
-    fi
-
-    if [ "$current_xray_version" = "$XRAY_VERSION_PIN" ] && systemctl list-unit-files 2>/dev/null | grep -q '^xray\.service'; then
-        systemctl enable xray >/dev/null 2>&1 || true
-        return 0
-    fi
-
-    if [ -n "$current_xray_version" ] && [ "$current_xray_version" != "$XRAY_VERSION_PIN" ]; then
-        warn "Обнаружен Xray ${current_xray_version}. Переключаемся на pinned-версию ${XRAY_VERSION_PIN} из-за регрессии TProxy/TCP в более новых релизах."
-    else
-        log "Установка Xray-core ${XRAY_VERSION_PIN} через официальный инсталлятор..."
-    fi
-
-    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version "$XRAY_VERSION_PIN"
-    systemctl daemon-reload
-    systemctl enable xray >/dev/null 2>&1 || true
-}
-
-resolve_xray_bin() {
-    command -v xray 2>/dev/null || true
-}
-
-resolve_awg_key_bin() {
-    # Prefer the stable WireGuard CLI for key material; fall back to awg if needed.
-    command -v wg 2>/dev/null || command -v awg 2>/dev/null || true
-}
-
-trim_cr_value() {
-    printf '%s' "$1" | tr -d '\r'
-}
-
 read_cred_value() {
     local key="$1"
     local file="$2"
@@ -162,6 +130,166 @@ read_url_port() {
 
     raw=$(grep "^${key}=" "$file" 2>/dev/null | head -n1 | sed -e 's|.*:| |' -e 's|/.*||' | xargs || true)
     trim_cr_value "$raw"
+}
+
+trim_cr_value() {
+    printf '%s' "$1" | tr -d '\r'
+}
+
+validate_stack() {
+    local agh_service_name="$1"
+
+    log "Валидация Xray, AmneziaWG и AdGuardHome..."
+    xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
+    systemctl restart xray || err "Не удалось перезапустить xray."
+    systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0 после настройки."
+    systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
+
+    ss -lntup | grep -Eq ':443 ' || err "Xray не слушает порт 443."
+    ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
+    dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
+    awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
+}
+
+ensure_swapfile() {
+    local swapfile="/swapfile"
+    local swap_size="1G"
+    local fstab_line="/swapfile none swap sw 0 0 # 3x-awg-adg-bundle"
+
+    if swapon --show --noheadings 2>/dev/null | grep -q .; then
+        warn "Swap уже активен, пропускаем создание swapfile."
+        return 0
+    fi
+
+    if [ -f "$swapfile" ]; then
+        log "Используем существующий swapfile ${swapfile}."
+    else
+        log "Создание swapfile ${swapfile} (${swap_size})..."
+        if command -v fallocate >/dev/null 2>&1; then
+            if ! fallocate -l "$swap_size" "$swapfile"; then
+                warn "fallocate не сработал, используем dd для создания swapfile."
+                dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
+            fi
+        else
+            dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
+        fi
+        chmod 600 "$swapfile"
+        mkswap "$swapfile" >/dev/null
+    fi
+
+    chmod 600 "$swapfile"
+    if ! grep -qF "$fstab_line" /etc/fstab; then
+        echo "$fstab_line" >> /etc/fstab
+    fi
+    swapon "$swapfile"
+    log "Swapfile активирован: ${swapfile}"
+}
+
+resolve_awg_key_bin() {
+    # Prefer the stable WireGuard CLI for key material; fall back to awg if needed.
+    command -v wg 2>/dev/null || command -v awg 2>/dev/null || true
+}
+
+ensure_awg_build_dependencies() {
+    local header_pkg="linux-headers-$(uname -r)"
+
+    apt install -y git build-essential dkms libmnl-dev libelf-dev "$header_pkg" \
+        || err "Не удалось установить точные kernel headers (${header_pkg}) для сборки AmneziaWG."
+}
+
+load_existing_awg_credentials() {
+    local awg_key_bin="${AWG_KEY_BIN:-}"
+
+    if [ -z "$awg_key_bin" ]; then
+        awg_key_bin="$(resolve_awg_key_bin || true)"
+    fi
+
+    if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+        log "Загрузка существующих credentials AmneziaWG из $CREDS_FILE..."
+        SERVER_PRIV=$(read_cred_value "AWG_SERVER_PRIV" "$CREDS_FILE")
+        CLIENT_PRIV=$(read_cred_value "AWG_CLIENT_PRIV" "$CREDS_FILE")
+        CLIENT_PSK=$(read_cred_value "AWG_CLIENT_PSK" "$CREDS_FILE")
+        AWG_PORT=$(read_cred_value "AWG_PORT" "$CREDS_FILE")
+        JC=$(read_cred_value "AWG_JC" "$CREDS_FILE")
+        JMIN=$(read_cred_value "AWG_JMIN" "$CREDS_FILE")
+        JMAX=$(read_cred_value "AWG_JMAX" "$CREDS_FILE")
+        S1=$(read_cred_value "AWG_S1" "$CREDS_FILE")
+        S2=$(read_cred_value "AWG_S2" "$CREDS_FILE")
+        H1=$(read_cred_value "AWG_H1" "$CREDS_FILE")
+        H2=$(read_cred_value "AWG_H2" "$CREDS_FILE")
+        H3=$(read_cred_value "AWG_H3" "$CREDS_FILE")
+        H4=$(read_cred_value "AWG_H4" "$CREDS_FILE")
+    fi
+
+    if [ -z "$SERVER_PRIV" ] || [ -z "$CLIENT_PRIV" ] || [ -z "$CLIENT_PSK" ]; then
+        if [ -f /etc/amnezia/amneziawg/awg0.conf ] && [ -f /root/amnezia_client.conf ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+            log "Восстанавливаем существующие credentials AmneziaWG из текущих конфигов..."
+            SERVER_PRIV=$(read_config_assignment "PrivateKey = " /etc/amnezia/amneziawg/awg0.conf)
+            CLIENT_PRIV=$(read_config_assignment "PrivateKey = " /root/amnezia_client.conf)
+            CLIENT_PSK=$(read_config_assignment "PresharedKey = " /root/amnezia_client.conf)
+            AWG_PORT=$(read_config_assignment "ListenPort = " /etc/amnezia/amneziawg/awg0.conf)
+            JC=$(read_config_assignment "Jc = " /etc/amnezia/amneziawg/awg0.conf)
+            JMIN=$(read_config_assignment "Jmin = " /etc/amnezia/amneziawg/awg0.conf)
+            JMAX=$(read_config_assignment "Jmax = " /etc/amnezia/amneziawg/awg0.conf)
+            S1=$(read_config_assignment "S1 = " /etc/amnezia/amneziawg/awg0.conf)
+            S2=$(read_config_assignment "S2 = " /etc/amnezia/amneziawg/awg0.conf)
+            H1=$(read_config_assignment "H1 = " /etc/amnezia/amneziawg/awg0.conf)
+            H2=$(read_config_assignment "H2 = " /etc/amnezia/amneziawg/awg0.conf)
+            H3=$(read_config_assignment "H3 = " /etc/amnezia/amneziawg/awg0.conf)
+            H4=$(read_config_assignment "H4 = " /etc/amnezia/amneziawg/awg0.conf)
+        fi
+    fi
+
+    [ -n "$awg_key_bin" ] || err "Не найден awg/wg для восстановления ключей AmneziaWG."
+
+    if [ -n "$SERVER_PRIV" ]; then
+        SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$awg_key_bin" pubkey)
+    fi
+
+    if [ -n "$CLIENT_PRIV" ]; then
+        CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$awg_key_bin" pubkey)
+    fi
+}
+
+cleanup_legacy_awg_dns_redirects() {
+    iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
+}
+
+cleanup_legacy_adguard_units() {
+    systemctl stop AdGuardHome 2>/dev/null || true
+    systemctl stop adguardhome 2>/dev/null || true
+    systemctl disable adguardhome 2>/dev/null || true
+    rm -f /etc/systemd/system/adguardhome.service
+    rm -rf /etc/systemd/system/adguardhome.service.d
+    systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+install_xray_core() {
+    local current_xray_version=""
+
+    if command -v xray >/dev/null 2>&1; then
+        current_xray_version=$(xray version 2>/dev/null | awk 'NR==1 {print $2}')
+    fi
+
+    if [ "$current_xray_version" = "$XRAY_VERSION_PIN" ] && systemctl list-unit-files 2>/dev/null | grep -q '^xray\.service'; then
+        systemctl enable xray >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    if [ -n "$current_xray_version" ] && [ "$current_xray_version" != "$XRAY_VERSION_PIN" ]; then
+        warn "Обнаружен Xray ${current_xray_version}. Переключаемся на pinned-версию ${XRAY_VERSION_PIN} из-за регрессии TProxy/TCP в более новых релизах."
+    else
+        log "Установка Xray-core ${XRAY_VERSION_PIN} через официальный инсталлятор..."
+    fi
+
+    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version "$XRAY_VERSION_PIN"
+    systemctl daemon-reload
+    systemctl enable xray >/dev/null 2>&1 || true
+}
+
+resolve_xray_bin() {
+    command -v xray 2>/dev/null || true
 }
 
 _parse_x25519_output() {
@@ -206,173 +334,6 @@ remove_legacy_xui() {
     rm -f /etc/systemd/system/x-ui.service
     rm -rf /usr/local/x-ui /etc/x-ui
     systemctl daemon-reload >/dev/null 2>&1 || true
-}
-
-reset_cascade_state() {
-    CASCADE_ENABLED=0
-    CASCADE_MODE=""
-    CASCADE_VLESS=""
-    CASCADE_ADDRESS=""
-    CASCADE_ADDRESS_IP=""
-    CASCADE_PORT=""
-    CASCADE_UUID=""
-    CASCADE_FLOW=""
-    CASCADE_PBK=""
-    CASCADE_SNI=""
-    CASCADE_SID=""
-    CASCADE_FP=""
-    CASCADE_SPX=""
-    FINAL_MODE="direct"
-}
-
-parse_cascade_vless_uri() {
-    local parser_output parser_status
-
-    [ -n "$CASCADE_VLESS" ] || err "Пустой --cascade-vless. Передайте полный vless:// URI."
-
-    set +e
-    parser_output=$(
-        CASCADE_VLESS_INPUT="$CASCADE_VLESS" python3 - <<'PY' 2>&1
-from urllib.parse import parse_qs, unquote, urlparse
-import os
-
-uri = os.environ.get("CASCADE_VLESS_INPUT", "").strip()
-if not uri:
-    raise SystemExit("Missing cascade VLESS URI.")
-
-try:
-    u = urlparse(uri)
-except ValueError as exc:
-    raise SystemExit(f"Invalid VLESS URI: {exc}")
-
-if u.scheme != "vless":
-    raise SystemExit("Unsupported scheme: expected vless")
-
-uuid = unquote(u.username or "")
-host = u.hostname or ""
-if not uuid:
-    raise SystemExit("Missing VLESS user UUID.")
-if not host:
-    raise SystemExit("Missing VLESS upstream host.")
-
-try:
-    port = u.port or 443
-except ValueError as exc:
-    raise SystemExit(f"Invalid VLESS port: {exc}")
-
-q = {k: v[-1] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
-required = ["security", "type", "encryption", "pbk", "sni", "sid"]
-for key in required:
-    if key not in q or not q[key]:
-        raise SystemExit(f"Missing required VLESS query field: {key}")
-
-if q.get("security") != "reality":
-    raise SystemExit("Only security=reality is supported in v1")
-if q.get("type") != "tcp":
-    raise SystemExit("Only type=tcp is supported in v1")
-if q.get("encryption") != "none":
-    raise SystemExit("Only encryption=none is supported in v1")
-
-flow = q.get("flow", "xtls-rprx-vision") or "xtls-rprx-vision"
-fp = q.get("fp", "chrome") or "chrome"
-spx = unquote(q.get("spx", "/") or "/")
-
-print(host)
-print(port)
-print(uuid)
-print(flow)
-print(q["pbk"])
-print(q["sni"])
-print(q["sid"])
-print(fp)
-print(spx)
-PY
-    )
-    parser_status=$?
-    set -e
-
-    [ "$parser_status" -eq 0 ] || err "Не удалось разобрать --cascade-vless: $parser_output"
-
-    CASCADE_ADDRESS=$(printf '%s\n' "$parser_output" | sed -n '1p')
-    CASCADE_PORT=$(printf '%s\n' "$parser_output" | sed -n '2p')
-    CASCADE_UUID=$(printf '%s\n' "$parser_output" | sed -n '3p')
-    CASCADE_FLOW=$(printf '%s\n' "$parser_output" | sed -n '4p')
-    CASCADE_PBK=$(printf '%s\n' "$parser_output" | sed -n '5p')
-    CASCADE_SNI=$(printf '%s\n' "$parser_output" | sed -n '6p')
-    CASCADE_SID=$(printf '%s\n' "$parser_output" | sed -n '7p')
-    CASCADE_FP=$(printf '%s\n' "$parser_output" | sed -n '8p')
-    CASCADE_SPX=$(printf '%s\n' "$parser_output" | sed -n '9p')
-
-    [ -n "$CASCADE_ADDRESS" ] || err "Cascade parser returned an empty host."
-    [ -n "$CASCADE_PORT" ] || err "Cascade parser returned an empty port."
-    [ -n "$CASCADE_UUID" ] || err "Cascade parser returned an empty UUID."
-    [ -n "$CASCADE_PBK" ] || err "Cascade parser returned an empty Reality public key."
-    [ -n "$CASCADE_SNI" ] || err "Cascade parser returned an empty SNI."
-    [ -n "$CASCADE_SID" ] || err "Cascade parser returned an empty shortId."
-}
-
-resolve_cascade_upstream_address() {
-    local resolver_output resolver_status
-
-    [ -n "$CASCADE_ADDRESS" ] || err "Cascade parser returned an empty host."
-
-    set +e
-    resolver_output=$(
-        CASCADE_ADDRESS_INPUT="$CASCADE_ADDRESS" python3 - <<'PY' 2>&1
-from ipaddress import ip_address
-from socket import AF_INET, AF_INET6, getaddrinfo
-import os
-
-host = os.environ.get("CASCADE_ADDRESS_INPUT", "").strip()
-if not host:
-    raise SystemExit("Missing cascade upstream host.")
-
-try:
-    ip_address(host)
-except ValueError:
-    infos = getaddrinfo(host, None)
-    ipv4 = next((info[4][0] for info in infos if info[0] == AF_INET), "")
-    ipv6 = next((info[4][0] for info in infos if info[0] == AF_INET6), "")
-    resolved = ipv4 or ipv6
-    if not resolved:
-        raise SystemExit(f"Unable to resolve cascade upstream host: {host}")
-    print(resolved)
-else:
-    print(host)
-PY
-    )
-    resolver_status=$?
-    set -e
-
-    [ "$resolver_status" -eq 0 ] || err "Не удалось определить IP каскадного upstream: $resolver_output"
-
-    CASCADE_ADDRESS_IP=$(printf '%s\n' "$resolver_output" | sed -n '1p')
-    [ -n "$CASCADE_ADDRESS_IP" ] || err "Resolved cascade upstream IP is empty."
-
-    if [ "$CASCADE_ADDRESS" != "$CASCADE_ADDRESS_IP" ]; then
-        log "Cascade upstream ${CASCADE_ADDRESS} resolved to ${CASCADE_ADDRESS_IP} for outbound use."
-    fi
-}
-
-configure_cascade_mode() {
-    if [ -n "$CASCADE_MODE_ARG" ] && [ "$CASCADE_MODE_ARG" != "auto" ]; then
-        err "Only --cascade-mode auto is supported in v1."
-    fi
-
-    reset_cascade_state
-
-    if [ -n "$CASCADE_VLESS_ARG" ]; then
-        CASCADE_VLESS="$CASCADE_VLESS_ARG"
-        CASCADE_MODE="${CASCADE_MODE_ARG:-auto}"
-        parse_cascade_vless_uri
-        resolve_cascade_upstream_address
-        CASCADE_ENABLED=1
-        FINAL_MODE="direct"
-        log "Cascade mode теперь влияет только на DNS-выход AdGuardHome; AWG-трафик остаётся direct."
-        return 0
-    fi
-
-    [ -z "$CASCADE_MODE_ARG" ] || err "--cascade-mode requires --cascade-vless."
 }
 
 write_xray_config() {
@@ -593,128 +554,171 @@ sys.stdout.write("\n")
 PY
 }
 
-cleanup_legacy_adguard_units() {
-    systemctl stop AdGuardHome 2>/dev/null || true
-    systemctl stop adguardhome 2>/dev/null || true
-    systemctl disable adguardhome 2>/dev/null || true
-    rm -f /etc/systemd/system/adguardhome.service
-    rm -rf /etc/systemd/system/adguardhome.service.d
-    systemctl daemon-reload >/dev/null 2>&1 || true
+reset_cascade_state() {
+    CASCADE_ENABLED=0
+    CASCADE_MODE=""
+    CASCADE_VLESS=""
+    CASCADE_ADDRESS=""
+    CASCADE_ADDRESS_IP=""
+    CASCADE_PORT=""
+    CASCADE_UUID=""
+    CASCADE_FLOW=""
+    CASCADE_PBK=""
+    CASCADE_SNI=""
+    CASCADE_SID=""
+    CASCADE_FP=""
+    CASCADE_SPX=""
+    FINAL_MODE="direct"
 }
 
-ensure_awg_build_dependencies() {
-    local header_pkg="linux-headers-$(uname -r)"
+parse_cascade_vless_uri() {
+    local parser_output parser_status
 
-    apt install -y git build-essential dkms libmnl-dev libelf-dev "$header_pkg" \
-        || err "Не удалось установить точные kernel headers (${header_pkg}) для сборки AmneziaWG."
+    [ -n "$CASCADE_VLESS" ] || err "Пустой --cascade-vless. Передайте полный vless:// URI."
+
+    set +e
+    parser_output=$(
+        CASCADE_VLESS_INPUT="$CASCADE_VLESS" python3 - <<'PY' 2>&1
+from urllib.parse import parse_qs, unquote, urlparse
+import os
+
+uri = os.environ.get("CASCADE_VLESS_INPUT", "").strip()
+if not uri:
+    raise SystemExit("Missing cascade VLESS URI.")
+
+try:
+    u = urlparse(uri)
+except ValueError as exc:
+    raise SystemExit(f"Invalid VLESS URI: {exc}")
+
+if u.scheme != "vless":
+    raise SystemExit("Unsupported scheme: expected vless")
+
+uuid = unquote(u.username or "")
+host = u.hostname or ""
+if not uuid:
+    raise SystemExit("Missing VLESS user UUID.")
+if not host:
+    raise SystemExit("Missing VLESS upstream host.")
+
+try:
+    port = u.port or 443
+except ValueError as exc:
+    raise SystemExit(f"Invalid VLESS port: {exc}")
+
+q = {k: v[-1] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
+required = ["security", "type", "encryption", "pbk", "sni", "sid"]
+for key in required:
+    if key not in q or not q[key]:
+        raise SystemExit(f"Missing required VLESS query field: {key}")
+
+if q.get("security") != "reality":
+    raise SystemExit("Only security=reality is supported in v1")
+if q.get("type") != "tcp":
+    raise SystemExit("Only type=tcp is supported in v1")
+if q.get("encryption") != "none":
+    raise SystemExit("Only encryption=none is supported in v1")
+
+flow = q.get("flow", "xtls-rprx-vision") or "xtls-rprx-vision"
+fp = q.get("fp", "chrome") or "chrome"
+spx = unquote(q.get("spx", "/") or "/")
+
+print(host)
+print(port)
+print(uuid)
+print(flow)
+print(q["pbk"])
+print(q["sni"])
+print(q["sid"])
+print(fp)
+print(spx)
+PY
+    )
+    parser_status=$?
+    set -e
+
+    [ "$parser_status" -eq 0 ] || err "Не удалось разобрать --cascade-vless: $parser_output"
+
+    CASCADE_ADDRESS=$(printf '%s\n' "$parser_output" | sed -n '1p')
+    CASCADE_PORT=$(printf '%s\n' "$parser_output" | sed -n '2p')
+    CASCADE_UUID=$(printf '%s\n' "$parser_output" | sed -n '3p')
+    CASCADE_FLOW=$(printf '%s\n' "$parser_output" | sed -n '4p')
+    CASCADE_PBK=$(printf '%s\n' "$parser_output" | sed -n '5p')
+    CASCADE_SNI=$(printf '%s\n' "$parser_output" | sed -n '6p')
+    CASCADE_SID=$(printf '%s\n' "$parser_output" | sed -n '7p')
+    CASCADE_FP=$(printf '%s\n' "$parser_output" | sed -n '8p')
+    CASCADE_SPX=$(printf '%s\n' "$parser_output" | sed -n '9p')
+
+    [ -n "$CASCADE_ADDRESS" ] || err "Cascade parser returned an empty host."
+    [ -n "$CASCADE_PORT" ] || err "Cascade parser returned an empty port."
+    [ -n "$CASCADE_UUID" ] || err "Cascade parser returned an empty UUID."
+    [ -n "$CASCADE_PBK" ] || err "Cascade parser returned an empty Reality public key."
+    [ -n "$CASCADE_SNI" ] || err "Cascade parser returned an empty SNI."
+    [ -n "$CASCADE_SID" ] || err "Cascade parser returned an empty shortId."
 }
 
-load_existing_awg_credentials() {
-    local awg_key_bin="${AWG_KEY_BIN:-}"
+resolve_cascade_upstream_address() {
+    local resolver_output resolver_status
 
-    if [ -z "$awg_key_bin" ]; then
-        awg_key_bin="$(resolve_awg_key_bin || true)"
-    fi
+    [ -n "$CASCADE_ADDRESS" ] || err "Cascade parser returned an empty host."
 
-    if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
-        log "Загрузка существующих credentials AmneziaWG из $CREDS_FILE..."
-        SERVER_PRIV=$(read_cred_value "AWG_SERVER_PRIV" "$CREDS_FILE")
-        CLIENT_PRIV=$(read_cred_value "AWG_CLIENT_PRIV" "$CREDS_FILE")
-        CLIENT_PSK=$(read_cred_value "AWG_CLIENT_PSK" "$CREDS_FILE")
-        AWG_PORT=$(read_cred_value "AWG_PORT" "$CREDS_FILE")
-        JC=$(read_cred_value "AWG_JC" "$CREDS_FILE")
-        JMIN=$(read_cred_value "AWG_JMIN" "$CREDS_FILE")
-        JMAX=$(read_cred_value "AWG_JMAX" "$CREDS_FILE")
-        S1=$(read_cred_value "AWG_S1" "$CREDS_FILE")
-        S2=$(read_cred_value "AWG_S2" "$CREDS_FILE")
-        H1=$(read_cred_value "AWG_H1" "$CREDS_FILE")
-        H2=$(read_cred_value "AWG_H2" "$CREDS_FILE")
-        H3=$(read_cred_value "AWG_H3" "$CREDS_FILE")
-        H4=$(read_cred_value "AWG_H4" "$CREDS_FILE")
-    fi
+    set +e
+    resolver_output=$(
+        CASCADE_ADDRESS_INPUT="$CASCADE_ADDRESS" python3 - <<'PY' 2>&1
+from ipaddress import ip_address
+from socket import AF_INET, AF_INET6, getaddrinfo
+import os
 
-    if [ -z "$SERVER_PRIV" ] || [ -z "$CLIENT_PRIV" ] || [ -z "$CLIENT_PSK" ]; then
-        if [ -f /etc/amnezia/amneziawg/awg0.conf ] && [ -f /root/amnezia_client.conf ] && [ "$ROTATE_CREDS" -eq 0 ]; then
-            log "Восстанавливаем существующие credentials AmneziaWG из текущих конфигов..."
-            SERVER_PRIV=$(read_config_assignment "PrivateKey = " /etc/amnezia/amneziawg/awg0.conf)
-            CLIENT_PRIV=$(read_config_assignment "PrivateKey = " /root/amnezia_client.conf)
-            CLIENT_PSK=$(read_config_assignment "PresharedKey = " /root/amnezia_client.conf)
-            AWG_PORT=$(read_config_assignment "ListenPort = " /etc/amnezia/amneziawg/awg0.conf)
-            JC=$(read_config_assignment "Jc = " /etc/amnezia/amneziawg/awg0.conf)
-            JMIN=$(read_config_assignment "Jmin = " /etc/amnezia/amneziawg/awg0.conf)
-            JMAX=$(read_config_assignment "Jmax = " /etc/amnezia/amneziawg/awg0.conf)
-            S1=$(read_config_assignment "S1 = " /etc/amnezia/amneziawg/awg0.conf)
-            S2=$(read_config_assignment "S2 = " /etc/amnezia/amneziawg/awg0.conf)
-            H1=$(read_config_assignment "H1 = " /etc/amnezia/amneziawg/awg0.conf)
-            H2=$(read_config_assignment "H2 = " /etc/amnezia/amneziawg/awg0.conf)
-            H3=$(read_config_assignment "H3 = " /etc/amnezia/amneziawg/awg0.conf)
-            H4=$(read_config_assignment "H4 = " /etc/amnezia/amneziawg/awg0.conf)
-        fi
-    fi
+host = os.environ.get("CASCADE_ADDRESS_INPUT", "").strip()
+if not host:
+    raise SystemExit("Missing cascade upstream host.")
 
-    [ -n "$awg_key_bin" ] || err "Не найден awg/wg для восстановления ключей AmneziaWG."
+try:
+    ip_address(host)
+except ValueError:
+    infos = getaddrinfo(host, None)
+    ipv4 = next((info[4][0] for info in infos if info[0] == AF_INET), "")
+    ipv6 = next((info[4][0] for info in infos if info[0] == AF_INET6), "")
+    resolved = ipv4 or ipv6
+    if not resolved:
+        raise SystemExit(f"Unable to resolve cascade upstream host: {host}")
+    print(resolved)
+else:
+    print(host)
+PY
+    )
+    resolver_status=$?
+    set -e
 
-    if [ -n "$SERVER_PRIV" ]; then
-        SERVER_PUB=$(printf '%s' "$SERVER_PRIV" | "$awg_key_bin" pubkey)
-    fi
+    [ "$resolver_status" -eq 0 ] || err "Не удалось определить IP каскадного upstream: $resolver_output"
 
-    if [ -n "$CLIENT_PRIV" ]; then
-        CLIENT_PUB=$(printf '%s' "$CLIENT_PRIV" | "$awg_key_bin" pubkey)
+    CASCADE_ADDRESS_IP=$(printf '%s\n' "$resolver_output" | sed -n '1p')
+    [ -n "$CASCADE_ADDRESS_IP" ] || err "Resolved cascade upstream IP is empty."
+
+    if [ "$CASCADE_ADDRESS" != "$CASCADE_ADDRESS_IP" ]; then
+        log "Cascade upstream ${CASCADE_ADDRESS} resolved to ${CASCADE_ADDRESS_IP} for outbound use."
     fi
 }
 
-validate_stack() {
-    local agh_service_name="$1"
+configure_cascade_mode() {
+    if [ -n "$CASCADE_MODE_ARG" ] && [ "$CASCADE_MODE_ARG" != "auto" ]; then
+        err "Only --cascade-mode auto is supported in v1."
+    fi
 
-    log "Валидация Xray, AmneziaWG и AdGuardHome..."
-    xray run -test -config /usr/local/etc/xray/config.json || err "Xray config validation failed."
-    systemctl restart xray || err "Не удалось перезапустить xray."
-    systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0 после настройки."
-    systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
+    reset_cascade_state
 
-    ss -lntup | grep -Eq ':443 ' || err "Xray не слушает порт 443."
-    ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
-    dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
-    awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
-}
-
-cleanup_legacy_awg_dns_redirects() {
-    iptables -t nat -D PREROUTING -i awg0 -p udp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
-    iptables -t nat -D PREROUTING -i awg0 -p tcp --dport 53 -j REDIRECT --to-port "${ADG_DNS_PORT}" 2>/dev/null || true
-}
-
-ensure_swapfile() {
-    local swapfile="/swapfile"
-    local swap_size="1G"
-    local fstab_line="/swapfile none swap sw 0 0 # 3x-awg-adg-bundle"
-
-    if swapon --show --noheadings 2>/dev/null | grep -q .; then
-        warn "Swap уже активен, пропускаем создание swapfile."
+    if [ -n "$CASCADE_VLESS_ARG" ]; then
+        CASCADE_VLESS="$CASCADE_VLESS_ARG"
+        CASCADE_MODE="${CASCADE_MODE_ARG:-auto}"
+        parse_cascade_vless_uri
+        resolve_cascade_upstream_address
+        CASCADE_ENABLED=1
+        FINAL_MODE="direct"
+        log "Cascade mode теперь влияет только на DNS-выход AdGuardHome; AWG-трафик остаётся direct."
         return 0
     fi
 
-    if [ -f "$swapfile" ]; then
-        log "Используем существующий swapfile ${swapfile}."
-    else
-        log "Создание swapfile ${swapfile} (${swap_size})..."
-        if command -v fallocate >/dev/null 2>&1; then
-            if ! fallocate -l "$swap_size" "$swapfile"; then
-                warn "fallocate не сработал, используем dd для создания swapfile."
-                dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
-            fi
-        else
-            dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
-        fi
-        chmod 600 "$swapfile"
-        mkswap "$swapfile" >/dev/null
-    fi
-
-    chmod 600 "$swapfile"
-    if ! grep -qF "$fstab_line" /etc/fstab; then
-        echo "$fstab_line" >> /etc/fstab
-    fi
-    swapon "$swapfile"
-    log "Swapfile активирован: ${swapfile}"
+    [ -z "$CASCADE_MODE_ARG" ] || err "--cascade-mode requires --cascade-vless."
 }
 
 # ==============================================================================

@@ -3,7 +3,11 @@
 # Description: Bootstrap layer for the modular 3x-ui + AmneziaWG + AdGuardHome installer.
 # Assembled from source modules:
 #   - src/setup/00-bootstrap.sh
-#   - src/setup/10-helpers.sh
+#   - src/setup/10-common.sh
+#   - src/setup/11-awg-helpers.sh
+#   - src/setup/12-agh-helpers.sh
+#   - src/setup/13-3x-helpers.sh
+#   - src/setup/14-port-forwarding-helpers.sh
 #   - src/setup/20-system.sh
 #   - src/setup/30-xray.sh
 #   - src/setup/40-awg.sh
@@ -23,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.0"
+SCRIPT_VERSION="3.0.1"
 XRAY_VERSION_PIN="25.1.30"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"

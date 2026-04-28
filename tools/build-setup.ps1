@@ -10,7 +10,11 @@ $outputPath = Join-Path $repoRoot 'setup.sh'
 
 $modules = @(
     '00-bootstrap.sh'
-    '10-helpers.sh'
+    '10-common.sh'
+    '11-awg-helpers.sh'
+    '12-agh-helpers.sh'
+    '13-3x-helpers.sh'
+    '14-port-forwarding-helpers.sh'
     '20-system.sh'
     '30-xray.sh'
     '40-awg.sh'

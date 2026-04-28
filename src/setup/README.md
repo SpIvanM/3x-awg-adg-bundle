@@ -8,7 +8,11 @@ Description: Индекс модулей для сборки setup.sh. Этот 
 Сборка выполняется скриптом [`tools/build-setup.ps1`](../../tools/build-setup.ps1) и собирает публичный [`setup.sh`](../../setup.sh) из следующих файлов:
 
 1. `00-bootstrap.sh`
-1. `10-helpers.sh`
+1. `10-common.sh`
+1. `11-awg-helpers.sh`
+1. `12-agh-helpers.sh`
+1. `13-3x-helpers.sh`
+1. `14-port-forwarding-helpers.sh`
 1. `20-system.sh`
 1. `30-xray.sh`
 1. `40-awg.sh`
@@ -18,8 +22,12 @@ Description: Индекс модулей для сборки setup.sh. Этот 
 
 ## Назначение модулей
 
-- `00-bootstrap.sh` - shebang, глобальные переменные, CLI, логирование, step-aware trap/err и базовые инварианты запуска.
-- `10-helpers.sh` - общие helper-функции для Xray, cascade DNS proxy, ключей AWG с fallback на `wg`, credentials, validation и cleanup, включая резолв upstream cascade в IP чтобы не ловить DNS-лупы и безопасное восстановление AWG-ключей без падения на пустых значениях.
+- `00-bootstrap.sh` - shebang, глобальные переменные, CLI, логирование, step-aware trap/err, assembled header и базовые инварианты запуска.
+- `10-common.sh` - общие helper-функции: чтение credentials и конфигов, CRLF-нормализация, разбор URL-порта, общий validation-хелпер и управление swapfile.
+- `11-awg-helpers.sh` - helper-функции AmneziaWG: fallback на `wg`, подготовка build dependencies, восстановление существующих AWG credentials и cleanup legacy DNS redirect-правил.
+- `12-agh-helpers.sh` - helper-функции AdGuardHome для cleanup legacy systemd units перед перезаписью канонического сервиса.
+- `13-3x-helpers.sh` - helper-функции стека `3x-ui` / Xray Reality: bootstrap Xray-core, разбор и генерация Reality keys, cleanup legacy `x-ui` и запись текущего Xray config.
+- `14-port-forwarding-helpers.sh` - helper-функции будущего relay / port-forwarding слоя; пока здесь изолирована текущая legacy cascade-логика, чтобы следующий сетевой этап не трогал общие и сервисные helper-ы.
 - `20-system.sh` - системная подготовка, `apt`, `sysctl`, swapfile, Xray bootstrap, загрузка credentials и установка `wireguard-tools` для ключевого fallback AWG.
 - `30-xray.sh` - cleanup legacy `x-ui` и построение дефолтной ссылки `VLESS`.
 - `40-awg.sh` - установка и конфигурация AmneziaWG с direct NAT egress, DNS DNAT к AdGuardHome и явными step-маркерами для ключей, конфига и рестарта, с повторным использованием восстановленных ключей.
