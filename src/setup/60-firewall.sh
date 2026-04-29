@@ -3,6 +3,10 @@
 # ==============================================================================
 mark_step "Firewall: UFW and SSH"
 log "Настройка UFW..."
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    ensure_relay_forward_ports
+fi
+
 if ss -tlnp | grep -q ':2244'; then
     warn "SSH уже на порту 2244, настраиваем правила для него."
     ufw allow 2244/tcp 2>/dev/null || true
@@ -29,6 +33,12 @@ else
     mark_step "Firewall: target allow AWG 53/udp"
 fi
 ufw allow ${AWG_PORT}/udp
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay forward allow external AWG"
+    ufw allow ${RELAY_FWD_AWG_PORT}/udp
+    mark_step "Firewall: relay forward allow external Reality"
+    ufw allow ${RELAY_FWD_REALITY_PORT}/tcp
+fi
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
 if [ "$DEPLOY_MODE" = "relay" ]; then
     mark_step "Firewall: relay local allow AdGuardHome DNS from awg0"
@@ -38,6 +48,10 @@ fi
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    setup_port_forwarding
+fi
+
 if ! ss -tlnp | grep -q ':2244'; then
     log "Изменение порта SSH на 2244..."
     sed -i '/^#\?Port /d' /etc/ssh/sshd_config

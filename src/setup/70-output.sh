@@ -48,6 +48,8 @@ TARGET_IP=${TARGET_IP}
 TARGET_AWG_PORT=${TARGET_AWG_PORT}
 TARGET_REALITY_PORT=${TARGET_REALITY_PORT}
 TARGET_DNS_PORT=${TARGET_DNS_PORT}
+RELAY_FWD_AWG_PORT=${RELAY_FWD_AWG_PORT}
+RELAY_FWD_REALITY_PORT=${RELAY_FWD_REALITY_PORT}
 CREDS
 chmod 600 "$CREDS_FILE"
 
@@ -76,8 +78,10 @@ else
     echo -e "Локальный Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
     echo -e "Локальный DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
 
-    echo -e "\n${GREEN}Future relay-forward endpoints:${RESET}"
-    echo -e "На этом этапе forwarding ещё не включён."
+    echo -e "\n${GREEN}Relay-forward endpoints:${RESET}"
+    echo -e "Future relay-forward endpoints из прошлых этапов теперь активны."
+    echo -e "Внешний AWG forward: ${SERVER_IP}:${RELAY_FWD_AWG_PORT}/udp -> ${TARGET_IP}:${TARGET_AWG_PORT}/udp"
+    echo -e "Внешний Reality forward: ${SERVER_IP}:${RELAY_FWD_REALITY_PORT}/tcp -> ${TARGET_IP}:${TARGET_REALITY_PORT}/tcp"
     echo -e "Target для будущего forwarding:"
     echo -e "Target IP: ${TARGET_IP}"
     echo -e "Target AWG: ${TARGET_IP}:${TARGET_AWG_PORT}/udp"

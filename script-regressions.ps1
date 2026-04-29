@@ -1,10 +1,10 @@
 ﻿<#
 Name: script regression checks
-Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, and the stage-5 relay local stack.
+Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay local stack, and the stage-6 relay transparent forwarding.
 Usage: powershell -File .\script-regressions.ps1
-Behavior: Reads setup.sh, uninstall.sh, source module index, and the build script and fails if the modular source layout, target topology, or relay local stack regresses.
+Behavior: Reads setup.sh, uninstall.sh, source module index, and the build script and fails if the modular source layout, target topology, relay local stack, or relay transparent forwarding regresses.
 Returns: Exit code 0 on pass, non-zero on regression.
-Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, or the stage-5 relay flow are absent.
+Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay flow, or the stage-6 transparent forwarding are absent.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -143,7 +143,7 @@ $adguardSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '50-adgua
 $firewallSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '60-firewall.sh')
 $outputSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '70-output.sh')
 
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.4"' -Message 'setup.sh must expose installer version 3.0.4 after the stage-5 rebuild.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.5"' -Message 'setup.sh must expose installer version 3.0.5 after the stage-6 rebuild.'
 Assert-Match -Text $setup -Pattern 'DEPLOY_MODE="target"' -Message 'setup.sh must default DEPLOY_MODE to target.'
 Assert-Match -Text $setup -Pattern '--mode\)' -Message 'setup.sh must accept --mode CLI argument.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version.'
@@ -233,6 +233,26 @@ Assert-Contains -Text $firewallSource -Needle 'Firewall: relay local allow Reali
 Assert-Contains -Text $firewallSource -Needle 'Firewall: relay local allow AWG 53/udp' -Message '60-firewall.sh must include a relay-local AWG firewall marker.'
 Assert-Match -Text $setupIndex -Pattern '14-port-forwarding-helpers\.sh.*prompt_target_details.*TARGET_IP' -Message 'src/setup/README.md must document relay target detail collection.'
 Assert-Match -Text $setupIndex -Pattern '70-output\.sh.*Relay local direct stack.*Future relay-forward endpoints' -Message 'src/setup/README.md must document relay-specific output.'
+
+Assert-Match -Text $forwardingHelpers -Pattern 'setup_port_forwarding\(\)' -Message '14-port-forwarding-helpers.sh must define setup_port_forwarding for relay.'
+Assert-Match -Text $forwardingHelpers -Pattern 'cleanup_port_forwarding\(\)' -Message '14-port-forwarding-helpers.sh must define cleanup_port_forwarding for relay.'
+foreach ($forwardField in @('RELAY_FWD_AWG_PORT', 'RELAY_FWD_REALITY_PORT')) {
+    Assert-Match -Text $forwardingHelpers -Pattern ('read_cred_value "{0}"' -f $forwardField) -Message "14-port-forwarding-helpers.sh must reuse existing $forwardField from credentials."
+    Assert-Contains -Text $outputSource -Needle "$forwardField=`${$forwardField}" -Message "70-output.sh must persist $forwardField."
+}
+Assert-Match -Text $forwardingHelpers -Pattern 'PREROUTING.*RELAY_FWD_AWG_PORT.*TARGET_IP.*TARGET_AWG_PORT' -Message 'setup_port_forwarding must DNAT relay AWG UDP traffic to target.'
+Assert-Match -Text $forwardingHelpers -Pattern 'PREROUTING.*RELAY_FWD_REALITY_PORT.*TARGET_IP.*TARGET_REALITY_PORT' -Message 'setup_port_forwarding must DNAT relay Reality TCP traffic to target.'
+Assert-Match -Text $forwardingHelpers -Pattern 'FORWARD.*TARGET_IP.*TARGET_AWG_PORT' -Message 'setup_port_forwarding must allow forwarded AWG traffic.'
+Assert-Match -Text $forwardingHelpers -Pattern 'FORWARD.*TARGET_IP.*TARGET_REALITY_PORT' -Message 'setup_port_forwarding must allow forwarded Reality traffic.'
+Assert-Match -Text $forwardingHelpers -Pattern 'POSTROUTING.*TARGET_IP.*TARGET_AWG_PORT' -Message 'setup_port_forwarding must masquerade forwarded AWG traffic.'
+Assert-Match -Text $forwardingHelpers -Pattern 'POSTROUTING.*TARGET_IP.*TARGET_REALITY_PORT' -Message 'setup_port_forwarding must masquerade forwarded Reality traffic.'
+Assert-Match -Text $forwardingHelpers -Pattern 'iptables-save|netfilter-persistent' -Message 'setup_port_forwarding must persist iptables rules after reboot.'
+Assert-NotMatch -Text $forwardingHelpers -Pattern 'setup_port_forwarding\(\)[\s\S]*ss .*PREROUTING|setup_port_forwarding\(\)[\s\S]*ss .*POSTROUTING|setup_port_forwarding\(\)[\s\S]*ss .*FORWARD' -Message 'setup_port_forwarding must not use ss as a false NAT rule check.'
+Assert-Match -Text $firewallSource -Pattern 'if \[ "\$DEPLOY_MODE" = "relay" \]; then\s+setup_port_forwarding\s+fi' -Message '60-firewall.sh must install relay forwarding rules after local relay ports are known and before UFW opens them.'
+Assert-Contains -Text $firewallSource -Needle 'Firewall: relay forward allow external AWG' -Message '60-firewall.sh must open relay external AWG forwarding port separately.'
+Assert-Contains -Text $firewallSource -Needle 'Firewall: relay forward allow external Reality' -Message '60-firewall.sh must open relay external Reality forwarding port separately.'
+Assert-Contains -Text $outputSource -Needle 'Relay-forward endpoints' -Message '70-output.sh must print active relay-forward endpoints after stage 6.'
+Assert-Match -Text $setupIndex -Pattern '14-port-forwarding-helpers\.sh.*setup_port_forwarding.*cleanup_port_forwarding' -Message 'src/setup/README.md must document relay forwarding setup and cleanup helpers.'
 
 Assert-Match -Text $uninstall -Pattern '</dev/tty' -Message 'uninstall.sh must keep reading confirmation from /dev/tty.'
 
