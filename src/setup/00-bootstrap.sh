@@ -73,6 +73,8 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 GREEN="\e[32m"
 RED="\e[31m"
 YELLOW="\e[33m"
+WHITE="\e[97m"
+BOLD="\e[1m"
 RESET="\e[0m"
 
 log() { echo -e "${GREEN}[INFO] $1${RESET}"; }

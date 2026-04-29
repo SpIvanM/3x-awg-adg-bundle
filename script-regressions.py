@@ -306,10 +306,10 @@ assert_match(system_source,
     "20-system.sh must prompt target details before relay local services are configured.")
 assert_contains(output_source, "Relay local direct stack",
     "70-output.sh must print a relay-local direct stack block.")
-assert_contains(output_source, "Future relay-forward endpoints",
-    "70-output.sh must print a future relay-forward endpoints block.")
-assert_contains(output_source, "Target для будущего forwarding",
-    "70-output.sh must print the saved target details for future forwarding.")
+assert_contains(output_source, "Status",
+    "70-output.sh must print a Status column in the forwarding table.")
+assert_contains(output_source, "State-файл правил",
+    "70-output.sh must print the saved state file location.")
 assert_contains(firewall_source, "Firewall: relay local allow Reality 443/tcp",
     "60-firewall.sh must include a relay-local Reality firewall marker.")
 assert_contains(firewall_source, "Firewall: relay local allow AWG 53/udp",

@@ -82,19 +82,33 @@ else
     echo -e "Локальный DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
 
     echo -e "\n${GREEN}Relay-forward endpoints:${RESET}"
-    echo -e "Future relay-forward endpoints из прошлых этапов теперь активны."
     if [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ] && [ -n "${PORT_FORWARDING_RULES:-}" ]; then
+        echo -e "------------------------------------------------------------------------------------------"
+        printf "${WHITE}%-30s${RESET} | ${WHITE}%-30s${RESET} | ${WHITE}%-10s${RESET}\n" "Local Endpoint" "Target Endpoint" "Status"
+        echo -e "------------------------------------------------------------------------------------------"
         while IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id; do
             [ -n "$rule_target_ip" ] || continue
             rule_external_port="${rule_external_port:-$rule_target_port}"
-            echo -e "${SERVER_IP}:${rule_external_port}/${rule_proto} -> ${rule_target_ip}:${rule_target_port}/${rule_proto}"
+            
+            local_ep="${SERVER_IP}:${rule_external_port}/${rule_proto}"
+            target_ep="${rule_target_ip}:${rule_target_port}/${rule_proto}"
+            
+            if [ "$rule_external_port" -eq "$rule_target_port" ]; then
+                status="${GREEN}[MATCH]${RESET}"
+            else
+                status="${YELLOW}[RANDOM]${RESET}"
+            fi
+            
+            # Using printf to ensure alignment, status has escape codes so we use %b or just embed it
+            printf "%-30s | %-30s | %b\n" "$local_ep" "$target_ep" "$status"
         done <<EOF
 ${PORT_FORWARDING_RULES}
 EOF
+        echo -e "------------------------------------------------------------------------------------------"
     else
         echo -e "Проброс портов не настроен."
     fi
-    echo -e "Target для будущего forwarding: см. ${FORWARDING_STATE_FILE}"
+    echo -e "\nState-файл правил: ${YELLOW}${FORWARDING_STATE_FILE}${RESET}"
 fi
 
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
