@@ -104,18 +104,20 @@ Description: Техническое ТЗ на доработку setup.sh и sou
   - [x] Сохранять правила через `netfilter-persistent` или `iptables-save`.
   - [x] Сохранять `DEFAULT_FORWARD_POLICY="ACCEPT"` только если forwarding включен или если это нужно для текущей сетевой модели.
 
-  - **Результат:** `setup_port_forwarding` генерирует DNAT/FORWARD/MASQUERADE по универсальному списку `target_ip|target_port|protocol|external_port|id`, использует owned comment-маркеры `3x-awg-fwd:<id>:<proto>`, удаляет только собственные правила и сохраняет iptables через `netfilter-persistent` или `iptables-save`. `60-firewall.sh` открывает внешние forwarding-порты из универсального state, больше не маркирует их как AWG/Reality-only и меняет `DEFAULT_FORWARD_POLICY` на `ACCEPT` только при включенном forwarding.
+  - **Результат:** `setup_port_forwarding` генерирует DNAT/FORWARD/MASQUERADE по универсальному списку `target_ip|target_port|protocol|external_port|id`, использует owned comment-маркеры `3x-awg-fwd:<id>:<proto>`, удаляет ВСЕ собственные правила по префиксу комментария перед настройкой (решена проблема "осиротевших" правил) и сохраняет iptables через `netfilter-persistent` или `iptables-save`. `60-firewall.sh` открывает внешние forwarding-порты из универсального state, больше не маркирует их как AWG/Reality-only и меняет `DEFAULT_FORWARD_POLICY` на `ACCEPT` только при включенном forwarding.
 
-- [ ] **6. Исправить публичный DNS endpoint AdGuardHome**
+- [x] **6. Исправить публичный DNS endpoint AdGuardHome**
 
   - **Контекст:** `src/setup/60-firewall.sh`, `src/setup/50-adguard.sh`, `src/setup/70-output.sh`.
   - **Цель:** `src/setup/60-firewall.sh`.
 
-  - [ ] Если финальный вывод показывает `DNS endpoint: SERVER_IP:ADG_DNS_PORT`, открыть `${ADG_DNS_PORT}` для UDP на публичном интерфейсе.
-  - [ ] Если финальный вывод показывает `DNS endpoint: SERVER_IP:ADG_DNS_PORT`, открыть `${ADG_DNS_PORT}` для TCP на публичном интерфейсе.
-  - [ ] Сохранить текущий DNAT внутри AWG: клиенты AWG продолжают видеть DNS как `10.8.0.1:53`.
-  - [ ] Добавить или актуализировать regression-тест, который проверяет наличие публичных UFW allow-правил для `${ADG_DNS_PORT}`.
-  - [ ] Ранее написанные тесты из задачи 1 по DNS endpoint должны стать зелеными.
+  - [x] Если финальный вывод показывает `DNS endpoint: SERVER_IP:ADG_DNS_PORT`, открыть `${ADG_DNS_PORT}` для UDP на публичном интерфейсе.
+  - [x] Если финальный вывод показывает `DNS endpoint: SERVER_IP:ADG_DNS_PORT`, открыть `${ADG_DNS_PORT}` для TCP на публичном интерфейсе.
+  - [x] Сохранить текущий DNAT внутри AWG: клиенты AWG продолжают видеть DNS как `10.8.0.1:53`.
+  - [x] Добавить или актуализировать regression-тест, который проверяет наличие публичных UFW allow-правил для `${ADG_DNS_PORT}`.
+  - [x] Ранее написанные тесты из задачи 1 по DNS endpoint должны стать зелеными.
+
+  - **Результат:** Порт AdGuardHome DNS (`ADG_DNS_PORT`) теперь открыт в UFW для TCP/UDP на всех интерфейсах, что делает его доступным публично как DNS endpoint. Regression-тесты подтверждают наличие разрешающих правил. `uninstall.sh` корректно вычищает эти правила.
 
 - [ ] **7. Не делать hard validation для 3x-ui**
 

@@ -27,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.9"
+SCRIPT_VERSION="3.1.0"
 CREDS_FILE="/root/.vpn-credentials"
 FORWARDING_STATE_FILE="/root/.vpn-forwarding-rules"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -527,6 +527,19 @@ iptables_delete_rule() {
     fi
 }
 
+delete_iptables_rules_by_comment_prefix() {
+    local prefix="$1"
+    local table
+    local rule
+    for table in nat filter; do
+        iptables-save -t "$table" | grep "comment \"$prefix" | sed 's/-A/-D/' | while read -r rule; do
+            [ -n "$rule" ] || continue
+            # shellcheck disable=SC2086
+            iptables -t "$table" $rule
+        done
+    done
+}
+
 persist_iptables_rules() {
     if command -v netfilter-persistent >/dev/null 2>&1; then
         netfilter-persistent save
@@ -580,36 +593,10 @@ EOF
 
 cleanup_port_forwarding() {
     [ "$DEPLOY_MODE" = "relay" ] || return 0
-    [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ] || return 0
-    [ -n "${PORT_FORWARDING_RULES:-}" ] || return 0
 
+    log "Очистка owned forwarding-правил iptables..."
     iptables_delete_rule filter FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "3x-awg relay fwd established" -j ACCEPT
-
-    local rule_line
-    local rule_target_ip
-    local rule_target_port
-    local rule_proto
-    local rule_external_port
-    local rule_id
-    local fwd_proto
-    local rule_comment
-
-    while IFS= read -r rule_line; do
-        [ -n "$rule_line" ] || continue
-        IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id <<EOF
-$rule_line
-EOF
-        rule_external_port="${rule_external_port:-$rule_target_port}"
-        rule_id="${rule_id:-$(make_forwarding_rule_id "$rule_target_ip" "$rule_target_port" "$rule_proto" "$rule_external_port")}"
-        for fwd_proto in $(forwarding_rule_protocols "$rule_proto"); do
-            rule_comment="3x-awg-fwd:${rule_id}:${fwd_proto}"
-            iptables_delete_rule nat PREROUTING -i "$PUB_INT" -p "$fwd_proto" --dport "$rule_external_port" -m comment --comment "$rule_comment prerouting" -j DNAT --to-destination "${rule_target_ip}:${rule_target_port}"
-            iptables_delete_rule filter FORWARD -i "$PUB_INT" -p "$fwd_proto" -d "$rule_target_ip" --dport "$rule_target_port" -m comment --comment "$rule_comment forward" -j ACCEPT
-            iptables_delete_rule nat POSTROUTING -p "$fwd_proto" -d "$rule_target_ip" --dport "$rule_target_port" -m comment --comment "$rule_comment postrouting" -j MASQUERADE
-        done
-    done <<EOF
-${PORT_FORWARDING_RULES}
-EOF
+    delete_iptables_rules_by_comment_prefix "3x-awg-fwd:"
 }
 
 forwarding_rule_protocols() {

@@ -49,6 +49,19 @@ iptables_delete_rule() {
     fi
 }
 
+delete_iptables_rules_by_comment_prefix() {
+    local prefix="$1"
+    local table
+    local rule
+    for table in nat filter; do
+        iptables-save -t "$table" | grep "comment \"$prefix" | sed 's/-A/-D/' | while read -r rule; do
+            [ -n "$rule" ] || continue
+            # shellcheck disable=SC2086
+            iptables -t "$table" $rule
+        done
+    done
+}
+
 persist_iptables_rules() {
     if command -v netfilter-persistent >/dev/null 2>&1; then
         netfilter-persistent save
@@ -59,34 +72,35 @@ persist_iptables_rules() {
 }
 
 cleanup_port_forwarding_rules() {
-    local target_ip target_awg_port target_reality_port relay_fwd_awg_port relay_fwd_reality_port pub_int
+    log "Удаление owned relay forwarding правил iptables..."
+    iptables_delete_rule filter FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "3x-awg relay fwd established" -j ACCEPT
+    delete_iptables_rules_by_comment_prefix "3x-awg-fwd:"
 
-    target_ip=$(read_cred_value "TARGET_IP" "$CREDS_FILE")
-    target_awg_port=$(read_cred_value "TARGET_AWG_PORT" "$CREDS_FILE")
-    target_reality_port=$(read_cred_value "TARGET_REALITY_PORT" "$CREDS_FILE")
+    local relay_fwd_awg_port
+    local relay_fwd_reality_port
+
     relay_fwd_awg_port=$(read_cred_value "RELAY_FWD_AWG_PORT" "$CREDS_FILE")
     relay_fwd_reality_port=$(read_cred_value "RELAY_FWD_REALITY_PORT" "$CREDS_FILE")
-    pub_int=$(detect_public_interface)
 
-    [ -n "$pub_int" ] || pub_int="eth0"
-    [ -n "$target_ip" ] || return 0
+    [ -n "$relay_fwd_awg_port" ] && ufw delete allow "${relay_fwd_awg_port}/udp" 2>/dev/null || true
+    [ -n "$relay_fwd_reality_port" ] && ufw delete allow "${relay_fwd_reality_port}/tcp" 2>/dev/null || true
 
-    iptables_delete_rule filter FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "3x-awg relay fwd established" -j ACCEPT
-
-    if [ -n "$relay_fwd_awg_port" ] && [ -n "$target_awg_port" ]; then
-        log "Удаление owned relay-forward правила AWG..."
-        iptables_delete_rule nat PREROUTING -i "$pub_int" -p udp --dport "$relay_fwd_awg_port" -m comment --comment "3x-awg relay fwd awg prerouting" -j DNAT --to-destination "${target_ip}:${target_awg_port}"
-        iptables_delete_rule filter FORWARD -i "$pub_int" -p udp -d "$target_ip" --dport "$target_awg_port" -m comment --comment "3x-awg relay fwd awg forward" -j ACCEPT
-        iptables_delete_rule nat POSTROUTING -p udp -d "$target_ip" --dport "$target_awg_port" -m comment --comment "3x-awg relay fwd awg postrouting" -j MASQUERADE
-        ufw delete allow "${relay_fwd_awg_port}/udp" 2>/dev/null || true
-    fi
-
-    if [ -n "$relay_fwd_reality_port" ] && [ -n "$target_reality_port" ]; then
-        log "Удаление owned relay-forward правила Reality..."
-        iptables_delete_rule nat PREROUTING -i "$pub_int" -p tcp --dport "$relay_fwd_reality_port" -m comment --comment "3x-awg relay fwd reality prerouting" -j DNAT --to-destination "${target_ip}:${target_reality_port}"
-        iptables_delete_rule filter FORWARD -i "$pub_int" -p tcp -d "$target_ip" --dport "$target_reality_port" -m comment --comment "3x-awg relay fwd reality forward" -j ACCEPT
-        iptables_delete_rule nat POSTROUTING -p tcp -d "$target_ip" --dport "$target_reality_port" -m comment --comment "3x-awg relay fwd reality postrouting" -j MASQUERADE
-        ufw delete allow "${relay_fwd_reality_port}/tcp" 2>/dev/null || true
+    # Также пробуем удалить правила по новому state-файлу, если он есть
+    if [ -f "/root/.vpn-forwarding-rules" ]; then
+        while IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id _rest; do
+            case "$rule_target_ip" in ''|\#*) continue ;; esac
+            [ -n "$rule_external_port" ] || rule_external_port="$rule_target_port"
+            [ -n "$rule_proto" ] || rule_proto="both"
+            case "$rule_proto" in
+                tcp) ufw delete allow "${rule_external_port}/tcp" 2>/dev/null || true ;;
+                udp) ufw delete allow "${rule_external_port}/udp" 2>/dev/null || true ;;
+                both|'')
+                    ufw delete allow "${rule_external_port}/tcp" 2>/dev/null || true
+                    ufw delete allow "${rule_external_port}/udp" 2>/dev/null || true
+                    ;;
+            esac
+        done < "/root/.vpn-forwarding-rules"
+        rm -f "/root/.vpn-forwarding-rules"
     fi
 
     persist_iptables_rules
@@ -153,7 +167,11 @@ log "Снятие owned UFW-правил без глобального reset..."
 adg_port=$(read_cred_value "ADG_PORT" "$CREDS_FILE")
 adg_dns_port=$(read_cred_value "ADG_DNS_PORT" "$CREDS_FILE")
 [ -n "$adg_port" ] && ufw delete allow "${adg_port}/tcp" 2>/dev/null || true
-[ -n "$adg_dns_port" ] && ufw delete allow in on awg0 to any port "$adg_dns_port" 2>/dev/null || true
+if [ -n "$adg_dns_port" ]; then
+    ufw delete allow in on awg0 to any port "$adg_dns_port" 2>/dev/null || true
+    ufw delete allow "${adg_dns_port}/tcp" 2>/dev/null || true
+    ufw delete allow "${adg_dns_port}/udp" 2>/dev/null || true
+fi
 ufw allow 2244/tcp 2>/dev/null || true
 ufw --force enable 2>/dev/null || true
 

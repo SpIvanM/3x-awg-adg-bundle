@@ -1,4 +1,4 @@
-﻿<#
+<#
 Name: script regression checks
 Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay local stack, the stage-6 relay transparent forwarding, the public AdGuardHome DNS endpoint, universal forwarding guardrails, and the stage-7 lifecycle/docs release sync.
 Usage: powershell -File .\script-regressions.ps1
@@ -307,3 +307,73 @@ if ($script:Failures.Count -gt 0) {
 }
 
 Write-Host 'script-regressions: OK'
+
+# Выбор портов и занятость
+Assert-Match -Text $forwardingHelpers -Pattern 'choose_relay_forward_port "\$rule_target_port"' -Message 'Должен предпочитаться целевой порт'
+Assert-Match -Text $forwardingHelpers -Pattern 'shuf -i 10000-65000' -Message 'Должен быть fallback на случайный порт'
+Assert-Match -Text $forwardingHelpers -Pattern 'ss -H -ltn' -Message 'Отсутствует проверка занятости TCP порта'
+
+# Резервирование портов
+foreach ($port in @('22', '53', '443')) {
+    Assert-Match -Text $forwardingHelpers -Pattern (':{0}:' -f $port) -Message "Порт $port должен быть зарезервирован"
+}
+
+# --- 5. Firewall и DNS (Task 6) ---
+Assert-Match -Text $firewallSource -Pattern 'ufw allow \$\{ADG_DNS_PORT\}/tcp' -Message 'DNS TCP порт не открыт в UFW'
+Assert-Match -Text $firewallSource -Pattern 'ufw allow \$\{ADG_DNS_PORT\}/udp' -Message 'DNS UDP порт не открыт в UFW'
+$p_ufw_fwd = @'
+(?s)while IFS=.*ufw allow \$\{rule_external_port\}/\$\{fwd_proto\}.*PORT_FORWARDING_RULES
+'@
+Assert-Match -Text $firewallSource -Pattern $p_ufw_fwd -Message 'UFW должен открывать каждый порт из списка проброса'
+
+# --- 6. Uninstall и Cleanup ---
+Assert-Match -Text $uninstall -Pattern 'delete_iptables_rules_by_comment_prefix "3x-awg-fwd:"' -Message 'Uninstall должен удалять правила по префиксу'
+Assert-NotMatch -Text $uninstall -Pattern 'ufw --force reset' -Message 'Uninstall не должен сбрасывать UFW целиком'
+Assert-Match -Text $uninstall -Pattern '3x-awg relay fwd established' -Message 'Uninstall должен удалять established правило'
+
+# --- 7. Документация ---
+Assert-Contains -Text $readme -Needle 'Transparent relay forwarding is enabled' -Message 'README (EN) не обновлен'
+Assert-Contains -Text $readme -Needle 'Transparent relay forwarding включён' -Message 'README (RU) не обновлен'
+Assert-Match -Text $setupMeta -Pattern '3\.1\.0' -Message 'Meta-файл версии не обновлен'
+
+if ($script:Failures.Count -gt 0) {
+    Write-Host "script-regressions failures:"
+    foreach ($f in $script:Failures) { Write-Host "- $f" }
+    exit 1
+}
+Write-Host 'script-regressions: OK (All original guardrails restored)'
+
+# Выбор портов и занятость
+Assert-Match -Text $forwardingHelpers -Pattern 'choose_relay_forward_port "\$rule_target_port"' -Message 'Должен предпочитаться целевой порт'
+Assert-Match -Text $forwardingHelpers -Pattern 'shuf -i 10000-65000' -Message 'Должен быть fallback на случайный порт'
+Assert-Match -Text $forwardingHelpers -Pattern 'ss -H -ltn' -Message 'Отсутствует проверка занятости TCP порта'
+
+# Резервирование портов
+foreach ($port in @('22', '53', '443')) {
+    Assert-Match -Text $forwardingHelpers -Pattern (':{0}:' -f $port) -Message "Порт $port должен быть зарезервирован"
+}
+
+# --- 5. Firewall и DNS (Task 6) ---
+Assert-Match -Text $firewallSource -Pattern 'ufw allow \$\{ADG_DNS_PORT\}/tcp' -Message 'DNS TCP порт не открыт в UFW'
+Assert-Match -Text $firewallSource -Pattern 'ufw allow \$\{ADG_DNS_PORT\}/udp' -Message 'DNS UDP порт не открыт в UFW'
+$p_ufw_fwd = @'
+(?s)while IFS=.*ufw allow \$\{rule_external_port\}/\$\{fwd_proto\}.*PORT_FORWARDING_RULES
+'@
+Assert-Match -Text $firewallSource -Pattern $p_ufw_fwd -Message 'UFW должен открывать каждый порт из списка проброса'
+
+# --- 6. Uninstall и Cleanup ---
+Assert-Match -Text $uninstall -Pattern 'delete_iptables_rules_by_comment_prefix "3x-awg-fwd:"' -Message 'Uninstall должен удалять правила по префиксу'
+Assert-NotMatch -Text $uninstall -Pattern 'ufw --force reset' -Message 'Uninstall не должен сбрасывать UFW целиком'
+Assert-Match -Text $uninstall -Pattern '3x-awg relay fwd established' -Message 'Uninstall должен удалять established правило'
+
+# --- 7. Документация ---
+Assert-Contains -Text $readme -Needle 'Transparent relay forwarding is enabled' -Message 'README (EN) не обновлен'
+Assert-Contains -Text $readme -Needle 'Transparent relay forwarding включён' -Message 'README (RU) не обновлен'
+Assert-Match -Text $setupMeta -Pattern '3\.1\.0' -Message 'Meta-файл версии не обновлен'
+
+if ($script:Failures.Count -gt 0) {
+    Write-Host "script-regressions failures:"
+    foreach ($f in $script:Failures) { Write-Host "- $f" }
+    exit 1
+}
+Write-Host 'script-regressions: OK (All original guardrails restored)'
