@@ -27,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.8"
+SCRIPT_VERSION="3.0.9"
 CREDS_FILE="/root/.vpn-credentials"
 FORWARDING_STATE_FILE="/root/.vpn-forwarding-rules"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -1066,7 +1066,7 @@ else
 fi
 ufw allow ${AWG_PORT}/udp
 if [ "$DEPLOY_MODE" = "relay" ]; then
-    mark_step "Firewall: relay forward allow external AWG"
+    mark_step "Firewall: relay forward allow external ports"
     while IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id; do
         [ -n "$rule_target_ip" ] || continue
         rule_external_port="${rule_external_port:-$rule_target_port}"
@@ -1076,7 +1076,6 @@ if [ "$DEPLOY_MODE" = "relay" ]; then
     done <<EOF
 ${PORT_FORWARDING_RULES:-}
 EOF
-    mark_step "Firewall: relay forward allow external Reality"
 fi
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
 if [ "$DEPLOY_MODE" = "relay" ]; then
@@ -1087,7 +1086,9 @@ fi
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
 ufw allow ${ADG_DNS_PORT}/tcp
 ufw allow ${ADG_DNS_PORT}/udp
-sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+if [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ]; then
+    sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+fi
 ufw --force enable
 if [ "$DEPLOY_MODE" = "relay" ]; then
     setup_port_forwarding

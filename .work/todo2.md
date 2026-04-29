@@ -90,19 +90,21 @@ Description: Техническое ТЗ на доработку setup.sh и sou
 
   - **Результат:** `src/setup/14-port-forwarding-helpers.sh` теперь выбирает внешний порт для каждого универсального forwarding-правила: сначала пробует target-порт, затем случайный свободный порт `10000-65000`; проверка учитывает `tcp`, `udp` и `both`, reserved-порты `22/2244/53/443`, порты AdGuardHome и уже выбранные forwarding-порты. Дополнительно исправлена дедупликация правил из задачи 3: повторный ввод того же `target_ip|target_port|protocol` не создает дубль, даже если у сохраненного правила уже есть отдельный внешний порт.
 
-- [ ] **5. Переписать firewall и NAT-логику**
+- [x] **5. Переписать firewall и NAT-логику**
 
   - **Контекст:** `src/setup/60-firewall.sh`, `src/setup/14-port-forwarding-helpers.sh`.
   - **Цель:** `src/setup/60-firewall.sh`, `src/setup/14-port-forwarding-helpers.sh`.
 
-  - [ ] Генерировать `iptables` DNAT-правила по универсальному списку forwarding-правил.
-  - [ ] Генерировать `iptables` FORWARD-правила по универсальному списку forwarding-правил.
-  - [ ] Генерировать MASQUERADE-правила, необходимые для корректной L4-переадресации.
-  - [ ] Разрешать соответствующие внешние forwarding-порты в `UFW`.
-  - [ ] Использовать comment-маркеры вида `3x-awg-fwd:<id>` или аналогичные для собственных правил.
-  - [ ] Удалять только собственные правила по comment-маркерам, без глобального flush/reset.
-  - [ ] Сохранять правила через `netfilter-persistent` или `iptables-save`.
-  - [ ] Сохранять `DEFAULT_FORWARD_POLICY="ACCEPT"` только если forwarding включен или если это нужно для текущей сетевой модели.
+  - [x] Генерировать `iptables` DNAT-правила по универсальному списку forwarding-правил.
+  - [x] Генерировать `iptables` FORWARD-правила по универсальному списку forwarding-правил.
+  - [x] Генерировать MASQUERADE-правила, необходимые для корректной L4-переадресации.
+  - [x] Разрешать соответствующие внешние forwarding-порты в `UFW`.
+  - [x] Использовать comment-маркеры вида `3x-awg-fwd:<id>` или аналогичные для собственных правил.
+  - [x] Удалять только собственные правила по comment-маркерам, без глобального flush/reset.
+  - [x] Сохранять правила через `netfilter-persistent` или `iptables-save`.
+  - [x] Сохранять `DEFAULT_FORWARD_POLICY="ACCEPT"` только если forwarding включен или если это нужно для текущей сетевой модели.
+
+  - **Результат:** `setup_port_forwarding` генерирует DNAT/FORWARD/MASQUERADE по универсальному списку `target_ip|target_port|protocol|external_port|id`, использует owned comment-маркеры `3x-awg-fwd:<id>:<proto>`, удаляет только собственные правила и сохраняет iptables через `netfilter-persistent` или `iptables-save`. `60-firewall.sh` открывает внешние forwarding-порты из универсального state, больше не маркирует их как AWG/Reality-only и меняет `DEFAULT_FORWARD_POLICY` на `ACCEPT` только при включенном forwarding.
 
 - [ ] **6. Исправить публичный DNS endpoint AdGuardHome**
 
