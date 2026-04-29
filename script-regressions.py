@@ -120,8 +120,8 @@ output_source       = read_text(os.path.join(SOURCE_ROOT, "70-output.sh"))
 # Stage 1: bootstrap baseline
 # ---------------------------------------------------------------------------
 
-assert_match(setup, r'SCRIPT_VERSION="3\.1\.0"',
-    "setup.sh must expose installer version 3.1.0 after the universal forwarding firewall rebuild.")
+assert_match(setup, r'SCRIPT_VERSION="3\.1\.1"',
+    "setup.sh must expose installer version 3.1.1 after the universal forwarding firewall rebuild.")
 assert_match(setup, r'DEPLOY_MODE="target"',
     "setup.sh must default DEPLOY_MODE to target.")
 assert_match(setup, r'--mode\)',
@@ -234,7 +234,7 @@ assert_match(awg_helpers, r"ensure_awg_obfuscation_params\(\)",
     "11-awg-helpers.sh must own idempotent AWG obfuscation parameter generation.")
 
 for param in ["JC", "JMIN", "JMAX", "S1", "S2", "H1", "H2", "H3", "H4"]:
-    assert_match(awg_helpers, r'\[ -z "\$\{' + param + r'\}" \]',
+    assert_match(awg_helpers, r'\[ -z "\$({)?' + param + r'(})?" \]',
         f"11-awg-helpers.sh must preserve existing {param} and generate it only when missing.")
 
 assert_not_match(adguard_source,
@@ -419,10 +419,8 @@ assert_match(uninstall, r"cleanup_port_forwarding_rules\(\)",
     "uninstall.sh must define a standalone owned forwarding cleanup helper.")
 assert_match(uninstall, r"iptables_delete_rule\(\)",
     "uninstall.sh must delete specific iptables rules instead of flushing tables.")
-assert_match(uninstall, r"3x-awg relay fwd awg prerouting",
-    "uninstall.sh must remove the owned AWG relay PREROUTING rule by comment.")
-assert_match(uninstall, r"3x-awg relay fwd reality prerouting",
-    "uninstall.sh must remove the owned Reality relay PREROUTING rule by comment.")
+assert_match(uninstall, r"delete_iptables_rules_by_comment_prefix \"3x-awg-fwd:\"",
+    "uninstall.sh must remove owned forwarding rules using the universal comment prefix.")
 assert_match(uninstall, r"persist_iptables_rules",
     "uninstall.sh must persist iptables after removing owned forwarding rules.")
 assert_not_match(uninstall,
@@ -447,7 +445,7 @@ assert_not_match(readme,
     "readme.md must not describe relay forwarding as a future stage after stage 7.")
 assert_contains(setup_index, "lifecycle uninstall",
     "src/setup/README.md must mention lifecycle uninstall alignment after stage 7.")
-assert_contains(setup_meta, "версии 3.1.0",
+assert_contains(setup_meta, "версии 3.1.1",
     "setup.sh.meta.md must describe the current assembled artifact version.")
 assert_contains(uninstall_meta, "точечно удаляет owned forwarding-правила",
     "uninstall.sh.meta.md must describe precise forwarding cleanup.")
