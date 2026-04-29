@@ -1,10 +1,10 @@
 ﻿<#
 Name: script regression checks
-Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay local stack, and the stage-6 relay transparent forwarding.
+Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay local stack, the stage-6 relay transparent forwarding, and the stage-7 lifecycle/docs release sync.
 Usage: powershell -File .\script-regressions.ps1
-Behavior: Reads setup.sh, uninstall.sh, source module index, and the build script and fails if the modular source layout, target topology, relay local stack, or relay transparent forwarding regresses.
+Behavior: Reads setup.sh, uninstall.sh, source module index, top-level README, metadata, and the build script and fails if the modular source layout, target topology, relay local stack, relay transparent forwarding, uninstall lifecycle, or release documentation regresses.
 Returns: Exit code 0 on pass, non-zero on regression.
-Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay flow, or the stage-6 transparent forwarding are absent.
+Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay flow, the stage-6 transparent forwarding, or stage-7 lifecycle/docs release sync are absent.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +18,9 @@ $setup = & $readText -LiteralPath (Join-Path $repoRoot 'setup.sh')
 $uninstall = & $readText -LiteralPath (Join-Path $repoRoot 'uninstall.sh')
 $buildSetup = & $readText -LiteralPath (Join-Path $repoRoot 'tools\build-setup.ps1')
 $setupIndex = & $readText -LiteralPath (Join-Path $sourceRoot 'README.md')
+$readme = & $readText -LiteralPath (Join-Path $repoRoot 'readme.md')
+$setupMeta = & $readText -LiteralPath (Join-Path $repoRoot 'setup.sh.meta.md')
+$uninstallMeta = & $readText -LiteralPath (Join-Path $repoRoot 'uninstall.sh.meta.md')
 
 function Read-OptionalText {
     param(
@@ -143,7 +146,7 @@ $adguardSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '50-adgua
 $firewallSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '60-firewall.sh')
 $outputSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '70-output.sh')
 
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.5"' -Message 'setup.sh must expose installer version 3.0.5 after the stage-6 rebuild.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.6"' -Message 'setup.sh must expose installer version 3.0.6 after the stage-7 rebuild.'
 Assert-Match -Text $setup -Pattern 'DEPLOY_MODE="target"' -Message 'setup.sh must default DEPLOY_MODE to target.'
 Assert-Match -Text $setup -Pattern '--mode\)' -Message 'setup.sh must accept --mode CLI argument.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version.'
@@ -255,5 +258,24 @@ Assert-Contains -Text $outputSource -Needle 'Relay-forward endpoints' -Message '
 Assert-Match -Text $setupIndex -Pattern '14-port-forwarding-helpers\.sh.*setup_port_forwarding.*cleanup_port_forwarding' -Message 'src/setup/README.md must document relay forwarding setup and cleanup helpers.'
 
 Assert-Match -Text $uninstall -Pattern '</dev/tty' -Message 'uninstall.sh must keep reading confirmation from /dev/tty.'
+Assert-NotMatch -Text $uninstall -Pattern 'ufw --force reset' -Message 'uninstall.sh must not globally reset UFW during stage 7 lifecycle cleanup.'
+Assert-Match -Text $uninstall -Pattern 'cleanup_port_forwarding_rules\(\)' -Message 'uninstall.sh must define a standalone owned forwarding cleanup helper.'
+Assert-Match -Text $uninstall -Pattern 'iptables_delete_rule\(\)' -Message 'uninstall.sh must delete specific iptables rules instead of flushing tables.'
+Assert-Match -Text $uninstall -Pattern '3x-awg relay fwd awg prerouting' -Message 'uninstall.sh must remove the owned AWG relay PREROUTING rule by comment.'
+Assert-Match -Text $uninstall -Pattern '3x-awg relay fwd reality prerouting' -Message 'uninstall.sh must remove the owned Reality relay PREROUTING rule by comment.'
+Assert-Match -Text $uninstall -Pattern 'persist_iptables_rules' -Message 'uninstall.sh must persist iptables after removing owned forwarding rules.'
+Assert-NotMatch -Text $uninstall -Pattern 'iptables .* -F|iptables -t nat .* -F|ufw delete allow 53/udp|ufw delete allow 443/tcp' -Message 'uninstall.sh must not use destructive firewall cleanup or remove shared reserved ports blindly.'
+Assert-Contains -Text $uninstall -Needle '3x-ui установлен интерактивно; uninstall удаляет файлы панели, но не управляет ручной конфигурацией Reality.' -Message 'uninstall.sh must document the manual 3x-ui lifecycle boundary.'
+Assert-NotMatch -Text $uninstall -Pattern 'CASCADE_|VLESS_LINK|ADG_HTTP_PROXY_PORT|/usr/local/etc/xray/config\.json' -Message 'uninstall.sh must not carry legacy cascade credential fields or direct Xray config assumptions.'
+
+Assert-Contains -Text $readme -Needle 'Transparent relay forwarding включён' -Message 'readme.md must describe active transparent relay forwarding in Russian.'
+Assert-Contains -Text $readme -Needle 'Transparent relay forwarding is enabled' -Message 'readme.md must describe active transparent relay forwarding in English.'
+Assert-Contains -Text $readme -Needle 'cleanup удаляет только owned forwarding-правила' -Message 'readme.md must document precise uninstall cleanup semantics.'
+Assert-NotMatch -Text $readme -Pattern 'Stage-5 limitations|Ограничения этапа 5|future transparent forwarding|будущего transparent forwarding|Transparent port forwarding .*not enabled|planned for the next stage' -Message 'readme.md must not describe relay forwarding as a future stage after stage 7.'
+Assert-Contains -Text $setupIndex -Needle 'lifecycle uninstall' -Message 'src/setup/README.md must mention lifecycle uninstall alignment after stage 7.'
+Assert-Contains -Text $setupMeta -Needle 'версии 3.0.6' -Message 'setup.sh.meta.md must describe the stage-7 assembled artifact version.'
+Assert-Contains -Text $uninstallMeta -Needle 'точечно удаляет owned forwarding-правила' -Message 'uninstall.sh.meta.md must describe precise forwarding cleanup.'
+
+Assert-NotMatch -Text $setup -Pattern 'CASCADE_|VLESS_LINK|ADG_HTTP_PROXY_PORT|XRAY_' -Message 'setup.sh credentials and runtime must remain free of legacy cascade/Xray fields.'
 
 Write-Host 'script-regressions: OK'

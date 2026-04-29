@@ -1,6 +1,6 @@
 <!--
 Name: 3x setup source index
-Description: Индекс модулей для сборки setup.sh. Этот файл нужен как карта разделения и не участвует в runtime.
+Description: Индекс модулей для сборки setup.sh и lifecycle uninstall. Этот файл нужен как карта разделения и не участвует в runtime.
 -->
 
 # Индекс source-модулей `setup.sh`
@@ -34,3 +34,9 @@ Description: Индекс модулей для сборки setup.sh. Этот 
 - `50-adguard.sh` - установка и конфигурация AdGuardHome в direct-режиме, без HTTP proxy и без автоконфигурации `3x-ui`.
 - `60-firewall.sh` - `UFW`, `SSH`, `Fail2Ban`, установка relay transparent forwarding после выбора локальных портов, target firewall openings для `Reality 443`, `AWG 53/udp`, AdGuardHome, relay-local openings для собственного direct-стека, отдельные relay-forward openings для внешних AWG/Reality портов и системная валидация стека.
 - `70-output.sh` - cleanup, сохранение credentials, финальный вывод оператору с ручным handoff по `3x-ui`, блок `Target handoff` для настройки `relay`, а также relay-вывод `Relay local direct stack`, активные `Relay-forward endpoints` на месте прежнего блока `Future relay-forward endpoints` и сохранённые target-параметры.
+
+## Lifecycle uninstall
+
+- [`../../uninstall.sh`](../../uninstall.sh) синхронизирован с текущим набором модулей: удаляет 3x-ui после ручного installer-flow, AmneziaWG, AdGuardHome, credentials и логи.
+- Relay cleanup удаляет только owned forwarding-правила с comment-маркерами `3x-awg relay fwd ...`, сохраняет iptables через `netfilter-persistent` или `iptables-save` и не выполняет глобальный flush/reset фаервола.
+- Устаревшая cascade-автоматизация и связанные поля прежних credentials не возвращаются в runtime или lifecycle.
