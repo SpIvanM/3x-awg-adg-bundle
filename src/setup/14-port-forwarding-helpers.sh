@@ -17,7 +17,7 @@ append_forwarding_rule() {
     rule_id="${rule_id:-$(make_forwarding_rule_id "$rule_target_ip" "$rule_target_port" "$rule_proto" "$rule_external_port")}"
     rule_line="${rule_target_ip}|${rule_target_port}|${rule_proto}|${rule_external_port}|${rule_id}"
 
-    if printf '%s\n' "${PORT_FORWARDING_RULES:-}" | grep -Fxq "$rule_line"; then
+    if printf '%s\n' "${PORT_FORWARDING_RULES:-}" | awk -F'|' -v ip="$rule_target_ip" -v port="$rule_target_port" -v proto="$rule_proto" '$1 == ip && $2 == port && $3 == proto { found = 1 } END { exit found ? 0 : 1 }'; then
         return 0
     fi
 
@@ -87,13 +87,12 @@ collect_forwarding_rules() {
     local target_port
     local proto
 
-    PORT_FORWARDING_RULES=""
-    PORT_FORWARDING_ENABLED=0
-
     printf 'Настроить проброс портов с этого сервера? [y/N]: ' >/dev/tty
     IFS= read -r answer </dev/tty
     answer=$(trim_cr_value "$answer")
     if ! is_yes_answer "$answer"; then
+        PORT_FORWARDING_RULES=""
+        PORT_FORWARDING_ENABLED=0
         log "Port forwarding не настроен: оператор выбрал обычный direct-режим."
         return 0
     fi
@@ -155,21 +154,32 @@ prompt_target_details() {
 is_relay_forward_port_available() {
     local port="$1"
     local proto="$2"
+    local reserved_ports=":22:2244:53:${AWG_PORT:-}:443:${REALITY_PORT:-}:${ADG_PORT:-}:${ADG_DNS_PORT:-}:${FORWARDING_SELECTED_EXTERNAL_PORTS:-}:"
 
     case "$port" in
         ''|*[!0-9]*) return 1 ;;
     esac
     [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
 
-    case ":53:${AWG_PORT:-}:443:${REALITY_PORT:-}:${ADG_PORT:-}:${ADG_DNS_PORT:-}:${RELAY_FWD_AWG_PORT:-}:${RELAY_FWD_REALITY_PORT:-}:" in
+    case "$reserved_ports" in
         *":${port}:"*) return 1 ;;
     esac
 
-    if [ "$proto" = "udp" ]; then
-        ! ss -H -lun "sport = :${port}" 2>/dev/null | grep -q .
-    else
-        ! ss -H -ltn "sport = :${port}" 2>/dev/null | grep -q .
-    fi
+    case "$proto" in
+        udp)
+            ! ss -H -lun "sport = :${port}" 2>/dev/null | grep -q .
+            ;;
+        tcp)
+            ! ss -H -ltn "sport = :${port}" 2>/dev/null | grep -q .
+            ;;
+        both|'')
+            ! ss -H -ltn "sport = :${port}" 2>/dev/null | grep -q . && \
+            ! ss -H -lun "sport = :${port}" 2>/dev/null | grep -q .
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 choose_relay_forward_port() {
@@ -241,13 +251,17 @@ ensure_relay_forward_ports() {
     local rule_external_port
     local rule_id
 
+    FORWARDING_SELECTED_EXTERNAL_PORTS=""
+
     while IFS= read -r rule_line; do
         [ -n "$rule_line" ] || continue
         IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id <<EOF
 $rule_line
 EOF
         rule_proto="${rule_proto:-both}"
-        rule_external_port="${rule_external_port:-$rule_target_port}"
+        if [ -z "${rule_external_port:-}" ] || ! is_relay_forward_port_available "$rule_external_port" "$rule_proto"; then
+            rule_external_port=$(choose_relay_forward_port "$rule_target_port" "$rule_proto")
+        fi
         rule_id="${rule_id:-$(make_forwarding_rule_id "$rule_target_ip" "$rule_target_port" "$rule_proto" "$rule_external_port")}"
 
         if [ -z "$normalized_rules" ]; then
@@ -256,6 +270,7 @@ EOF
             normalized_rules="${normalized_rules}
 ${rule_target_ip}|${rule_target_port}|${rule_proto}|${rule_external_port}|${rule_id}"
         fi
+        FORWARDING_SELECTED_EXTERNAL_PORTS="${FORWARDING_SELECTED_EXTERNAL_PORTS:+${FORWARDING_SELECTED_EXTERNAL_PORTS}:}${rule_external_port}"
     done <<EOF
 ${PORT_FORWARDING_RULES}
 EOF

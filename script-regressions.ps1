@@ -149,7 +149,7 @@ $adguardSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '50-adgua
 $firewallSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '60-firewall.sh')
 $outputSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '70-output.sh')
 
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.7"' -Message 'setup.sh must expose installer version 3.0.7 after the forwarding model rebuild.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.8"' -Message 'setup.sh must expose installer version 3.0.8 after the forwarding external port selection rebuild.'
 Assert-Match -Text $setup -Pattern 'DEPLOY_MODE="target"' -Message 'setup.sh must default DEPLOY_MODE to target.'
 Assert-Match -Text $setup -Pattern '--mode\)' -Message 'setup.sh must accept --mode CLI argument.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version.'
@@ -265,6 +265,13 @@ Assert-NotMatch -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\)
 Assert-NotMatch -Text $forwardingHelpers -Pattern '(?s)cleanup_port_forwarding\(\)[\s\S]*3x-awg relay fwd awg[\s\S]*3x-awg relay fwd reality' -Message 'cleanup_port_forwarding must not delete only AWG/Reality fixed forwarding rules.'
 Assert-Match -Text $forwardingHelpers -Pattern 'iptables-save|netfilter-persistent' -Message 'setup_port_forwarding must persist iptables rules after reboot.'
 Assert-NotMatch -Text $forwardingHelpers -Pattern 'setup_port_forwarding\(\)[\s\S]*ss .*PREROUTING|setup_port_forwarding\(\)[\s\S]*ss .*POSTROUTING|setup_port_forwarding\(\)[\s\S]*ss .*FORWARD' -Message 'setup_port_forwarding must not use ss as a false NAT rule check.'
+Assert-Match -Text $forwardingHelpers -Pattern 'choose_relay_forward_port "\$rule_target_port" "\$rule_proto"' -Message 'ensure_relay_forward_ports must prefer the target port as the local external port.'
+Assert-Match -Text $forwardingHelpers -Pattern 'shuf -i 10000-65000 -n 1' -Message 'choose_relay_forward_port must pick a random fallback port in the 10000-65000 range.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)is_relay_forward_port_available\(\).*both.*ss -H -ltn.*ss -H -lun' -Message 'port availability checks for proto=both must require the port to be free for both TCP and UDP.'
+Assert-Match -Text $forwardingHelpers -Pattern 'FORWARDING_SELECTED_EXTERNAL_PORTS' -Message 'forwarding external port selection must track already selected forwarding ports.'
+foreach ($reservedPort in @('22', '2244', '53', '443')) {
+    Assert-Match -Text $forwardingHelpers -Pattern (':{0}:' -f $reservedPort) -Message "forwarding external port selection must reserve port $reservedPort."
+}
 Assert-Match -Text $firewallSource -Pattern 'if \[ "\$DEPLOY_MODE" = "relay" \]; then\s+setup_port_forwarding\s+fi' -Message '60-firewall.sh must install relay forwarding rules after local relay ports are known and before UFW opens them.'
 Assert-Contains -Text $firewallSource -Needle 'Firewall: relay forward allow external AWG' -Message '60-firewall.sh must open relay external AWG forwarding port separately.'
 Assert-Contains -Text $firewallSource -Needle 'Firewall: relay forward allow external Reality' -Message '60-firewall.sh must open relay external Reality forwarding port separately.'
@@ -287,7 +294,7 @@ Assert-Contains -Text $readme -Needle 'Transparent relay forwarding is enabled' 
 Assert-Contains -Text $readme -Needle 'cleanup удаляет только owned forwarding-правила' -Message 'readme.md must document precise uninstall cleanup semantics.'
 Assert-NotMatch -Text $readme -Pattern 'Stage-5 limitations|Ограничения этапа 5|future transparent forwarding|будущего transparent forwarding|Transparent port forwarding .*not enabled|planned for the next stage' -Message 'readme.md must not describe relay forwarding as a future stage after stage 7.'
 Assert-Contains -Text $setupIndex -Needle 'lifecycle uninstall' -Message 'src/setup/README.md must mention lifecycle uninstall alignment after stage 7.'
-Assert-Contains -Text $setupMeta -Needle 'версии 3.0.7' -Message 'setup.sh.meta.md must describe the current assembled artifact version.'
+Assert-Contains -Text $setupMeta -Needle 'версии 3.0.8' -Message 'setup.sh.meta.md must describe the current assembled artifact version.'
 Assert-Contains -Text $uninstallMeta -Needle 'точечно удаляет owned forwarding-правила' -Message 'uninstall.sh.meta.md must describe precise forwarding cleanup.'
 
 Assert-NotMatch -Text $setup -Pattern 'CASCADE_|VLESS_LINK|ADG_HTTP_PROXY_PORT|XRAY_' -Message 'setup.sh credentials and runtime must remain free of legacy cascade/Xray fields.'
