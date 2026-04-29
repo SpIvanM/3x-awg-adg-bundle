@@ -35,9 +35,16 @@ fi
 ufw allow ${AWG_PORT}/udp
 if [ "$DEPLOY_MODE" = "relay" ]; then
     mark_step "Firewall: relay forward allow external AWG"
-    ufw allow ${RELAY_FWD_AWG_PORT}/udp
+    while IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id; do
+        [ -n "$rule_target_ip" ] || continue
+        rule_external_port="${rule_external_port:-$rule_target_port}"
+        for fwd_proto in $(forwarding_rule_protocols "$rule_proto"); do
+            ufw allow ${rule_external_port}/${fwd_proto}
+        done
+    done <<EOF
+${PORT_FORWARDING_RULES:-}
+EOF
     mark_step "Firewall: relay forward allow external Reality"
-    ufw allow ${RELAY_FWD_REALITY_PORT}/tcp
 fi
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
 if [ "$DEPLOY_MODE" = "relay" ]; then
@@ -46,6 +53,8 @@ else
     mark_step "Firewall: target allow AdGuardHome DNS from awg0"
 fi
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
+ufw allow ${ADG_DNS_PORT}/tcp
+ufw allow ${ADG_DNS_PORT}/udp
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
 if [ "$DEPLOY_MODE" = "relay" ]; then

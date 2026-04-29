@@ -9,6 +9,7 @@ Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$script:Failures = [System.Collections.Generic.List[string]]::new()
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $readText = 'C:\Users\ivanm\.codex\tools\windows-text-io\Read-Text.ps1'
@@ -44,7 +45,7 @@ function Assert-Match {
     )
 
     if ($Text -notmatch $Pattern) {
-        throw $Message
+        $script:Failures.Add($Message)
     }
 }
 
@@ -56,7 +57,7 @@ function Assert-NotMatch {
     )
 
     if ($Text -match $Pattern) {
-        throw $Message
+        $script:Failures.Add($Message)
     }
 }
 
@@ -68,7 +69,7 @@ function Assert-Contains {
     )
 
     if ($Text.IndexOf($Needle, [System.StringComparison]::Ordinal) -lt 0) {
-        throw $Message
+        $script:Failures.Add($Message)
     }
 }
 
@@ -79,7 +80,7 @@ function Assert-PathExists {
     )
 
     if (-not (Test-Path -LiteralPath $LiteralPath)) {
-        throw $Message
+        $script:Failures.Add($Message)
     }
 }
 
@@ -93,7 +94,7 @@ function Assert-MatchCount {
 
     $actualCount = ([regex]::Matches($Text, $Pattern)).Count
     if ($actualCount -ne $ExpectedCount) {
-        throw "$Message Expected $ExpectedCount, got $actualCount."
+        $script:Failures.Add("$Message Expected $ExpectedCount, got $actualCount.")
     }
 }
 
@@ -104,7 +105,7 @@ function Assert-PathMissing {
     )
 
     if (Test-Path -LiteralPath $LiteralPath) {
-        throw $Message
+        $script:Failures.Add($Message)
     }
 }
 
@@ -148,7 +149,7 @@ $adguardSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '50-adgua
 $firewallSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '60-firewall.sh')
 $outputSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '70-output.sh')
 
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.6"' -Message 'setup.sh must expose installer version 3.0.6 after the stage-7 rebuild.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.7"' -Message 'setup.sh must expose installer version 3.0.7 after the forwarding model rebuild.'
 Assert-Match -Text $setup -Pattern 'DEPLOY_MODE="target"' -Message 'setup.sh must default DEPLOY_MODE to target.'
 Assert-Match -Text $setup -Pattern '--mode\)' -Message 'setup.sh must accept --mode CLI argument.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version.'
@@ -227,10 +228,15 @@ Assert-Match -Text $setupIndex -Pattern '70-output\.sh.*Target handoff.*relay' -
 
 Assert-Match -Text $forwardingHelpers -Pattern 'prompt_target_details\(\)' -Message '14-port-forwarding-helpers.sh must define prompt_target_details for relay.'
 Assert-Contains -Text $forwardingHelpers -Needle '/dev/tty' -Message 'prompt_target_details must read relay target details through /dev/tty.'
-foreach ($targetField in @('TARGET_IP', 'TARGET_AWG_PORT', 'TARGET_REALITY_PORT', 'TARGET_DNS_PORT')) {
-    Assert-Match -Text $forwardingHelpers -Pattern ('read_cred_value "{0}"' -f $targetField) -Message "prompt_target_details must reuse existing $targetField from credentials."
-    Assert-Contains -Text $outputSource -Needle "$targetField=`${$targetField}" -Message "70-output.sh must persist $targetField for future relay forwarding."
-}
+Assert-Contains -Text $forwardingHelpers -Needle 'Настроить проброс портов с этого сервера? [y/N]' -Message 'prompt_target_details must ask whether forwarding should be configured before collecting targets.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)Настроить проброс портов с этого сервера\? \[y/N\].*(return 0|PORT_FORWARDING_ENABLED=0)' -Message 'prompt_target_details must treat no forwarding as a normal no-op path.'
+Assert-Contains -Text $forwardingHelpers -Needle 'Target IP' -Message 'prompt_target_details must ask for the first forwarding target IP after yes.'
+Assert-Contains -Text $forwardingHelpers -Needle 'Target port' -Message 'prompt_target_details must ask for the first target port without a separate continue question.'
+Assert-Match -Text $forwardingHelpers -Pattern 'tcp\|udp\|both|tcp, udp или both' -Message 'prompt_target_details must ask for forwarding protocol tcp, udp, or both.'
+Assert-Match -Text $forwardingHelpers -Pattern 'proto=.*both|PORT_FORWARD_PROTO=.*both|forward_proto=.*both' -Message 'prompt_target_details must default an empty protocol answer to both.'
+Assert-Contains -Text $forwardingHelpers -Needle 'Добавить еще порт для этого target? [y/N]' -Message 'prompt_target_details must ask whether to add another port for the same target after each port.'
+Assert-Contains -Text $forwardingHelpers -Needle 'Добавить еще target-сервер? [y/N]' -Message 'prompt_target_details must ask whether to add another target after finishing ports for one target.'
+Assert-NotMatch -Text $forwardingHelpers -Pattern 'Target AWG UDP port|Target Reality TCP port|Target DNS port' -Message 'prompt_target_details must no longer hard-code AWG, Reality, or DNS target port prompts.'
 Assert-Match -Text $systemSource -Pattern 'if \[ "\$DEPLOY_MODE" = "relay" \]; then\s+prompt_target_details\s+fi' -Message '20-system.sh must prompt target details before relay local services are configured.'
 Assert-Match -Text $awgSource -Pattern 'AWG_PORT=53' -Message '40-awg.sh must keep relay-local AmneziaWG on UDP port 53.'
 Assert-Contains -Text $outputSource -Needle 'Relay local direct stack' -Message '70-output.sh must print a relay-local direct stack block.'
@@ -238,7 +244,7 @@ Assert-Contains -Text $outputSource -Needle 'Future relay-forward endpoints' -Me
 Assert-Contains -Text $outputSource -Needle 'Target для будущего forwarding' -Message '70-output.sh must print the saved target details for future forwarding.'
 Assert-Contains -Text $firewallSource -Needle 'Firewall: relay local allow Reality 443/tcp' -Message '60-firewall.sh must include a relay-local Reality firewall marker.'
 Assert-Contains -Text $firewallSource -Needle 'Firewall: relay local allow AWG 53/udp' -Message '60-firewall.sh must include a relay-local AWG firewall marker.'
-Assert-Match -Text $setupIndex -Pattern '14-port-forwarding-helpers\.sh.*prompt_target_details.*TARGET_IP' -Message 'src/setup/README.md must document relay target detail collection.'
+Assert-Match -Text $setupIndex -Pattern '14-port-forwarding-helpers\.sh.*prompt_target_details.*проброс портов.*target IP.*target port.*protocol' -Message 'src/setup/README.md must document the interactive forwarding rule collection flow.'
 Assert-Match -Text $setupIndex -Pattern '70-output\.sh.*Relay local direct stack.*Future relay-forward endpoints' -Message 'src/setup/README.md must document relay-specific output.'
 
 Assert-Match -Text $forwardingHelpers -Pattern 'setup_port_forwarding\(\)' -Message '14-port-forwarding-helpers.sh must define setup_port_forwarding for relay.'
@@ -249,16 +255,14 @@ Assert-Match -Text $forwardingHelpers -Pattern 'rule_target_ip|target_ip_from_ru
 Assert-Match -Text $forwardingHelpers -Pattern 'rule_target_port|target_port_from_rule|fwd_target_port' -Message 'setup_port_forwarding must use a per-rule target port so arbitrary service ports can be forwarded.'
 Assert-Match -Text $forwardingHelpers -Pattern 'rule_external_port|external_port_from_rule|fwd_external_port' -Message 'setup_port_forwarding must use a per-rule external port for each forwarded service.'
 Assert-Match -Text $forwardingHelpers -Pattern 'rule_proto|proto_from_rule|fwd_proto' -Message 'setup_port_forwarding must use a per-rule protocol so TCP, UDP, and mixed forwarding can be represented.'
-foreach ($forwardField in @('RELAY_FWD_AWG_PORT', 'RELAY_FWD_REALITY_PORT')) {
-    Assert-Match -Text $forwardingHelpers -Pattern ('read_cred_value "{0}"' -f $forwardField) -Message "14-port-forwarding-helpers.sh must reuse existing $forwardField from credentials."
-    Assert-Contains -Text $outputSource -Needle "$forwardField=`${$forwardField}" -Message "70-output.sh must persist $forwardField."
-}
-Assert-Match -Text $forwardingHelpers -Pattern 'PREROUTING.*RELAY_FWD_AWG_PORT.*TARGET_IP.*TARGET_AWG_PORT' -Message 'setup_port_forwarding must DNAT relay AWG UDP traffic to target.'
-Assert-Match -Text $forwardingHelpers -Pattern 'PREROUTING.*RELAY_FWD_REALITY_PORT.*TARGET_IP.*TARGET_REALITY_PORT' -Message 'setup_port_forwarding must DNAT relay Reality TCP traffic to target.'
-Assert-Match -Text $forwardingHelpers -Pattern 'FORWARD.*TARGET_IP.*TARGET_AWG_PORT' -Message 'setup_port_forwarding must allow forwarded AWG traffic.'
-Assert-Match -Text $forwardingHelpers -Pattern 'FORWARD.*TARGET_IP.*TARGET_REALITY_PORT' -Message 'setup_port_forwarding must allow forwarded Reality traffic.'
-Assert-Match -Text $forwardingHelpers -Pattern 'POSTROUTING.*TARGET_IP.*TARGET_AWG_PORT' -Message 'setup_port_forwarding must masquerade forwarded AWG traffic.'
-Assert-Match -Text $forwardingHelpers -Pattern 'POSTROUTING.*TARGET_IP.*TARGET_REALITY_PORT' -Message 'setup_port_forwarding must masquerade forwarded Reality traffic.'
+Assert-Match -Text $forwardingHelpers -Pattern 'prompt_forwarding_rules|collect_forwarding_rules|add_forwarding_rule|append_forwarding_rule' -Message '14-port-forwarding-helpers.sh must collect multiple arbitrary forwarding rules interactively.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)(prompt_forwarding_rules|collect_forwarding_rules|add_forwarding_rule|append_forwarding_rule).*Добавить еще порт' -Message 'forwarding prompt flow must allow several arbitrary ports for one target.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)(prompt_forwarding_rules|collect_forwarding_rules|add_forwarding_rule|append_forwarding_rule).*Добавить еще target' -Message 'forwarding prompt flow must allow several target IPs.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat PREROUTING.*rule_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat PREROUTING.*fwd_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat PREROUTING.*target_ip_from_rule' -Message 'setup_port_forwarding must generate PREROUTING DNAT rules from each generic forwarding rule.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\).*iptables_ensure_rule filter FORWARD.*rule_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule filter FORWARD.*fwd_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule filter FORWARD.*target_ip_from_rule' -Message 'setup_port_forwarding must generate FORWARD rules from each generic forwarding rule.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat POSTROUTING.*rule_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat POSTROUTING.*fwd_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat POSTROUTING.*target_ip_from_rule' -Message 'setup_port_forwarding must generate MASQUERADE rules from each generic forwarding rule.'
+Assert-NotMatch -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\)[\s\S]*RELAY_FWD_AWG_PORT[\s\S]*RELAY_FWD_REALITY_PORT[\s\S]*TARGET_AWG_PORT[\s\S]*TARGET_REALITY_PORT' -Message 'setup_port_forwarding must not be hard-wired to only AWG and Reality forwarding fields.'
+Assert-NotMatch -Text $forwardingHelpers -Pattern '(?s)cleanup_port_forwarding\(\)[\s\S]*3x-awg relay fwd awg[\s\S]*3x-awg relay fwd reality' -Message 'cleanup_port_forwarding must not delete only AWG/Reality fixed forwarding rules.'
 Assert-Match -Text $forwardingHelpers -Pattern 'iptables-save|netfilter-persistent' -Message 'setup_port_forwarding must persist iptables rules after reboot.'
 Assert-NotMatch -Text $forwardingHelpers -Pattern 'setup_port_forwarding\(\)[\s\S]*ss .*PREROUTING|setup_port_forwarding\(\)[\s\S]*ss .*POSTROUTING|setup_port_forwarding\(\)[\s\S]*ss .*FORWARD' -Message 'setup_port_forwarding must not use ss as a false NAT rule check.'
 Assert-Match -Text $firewallSource -Pattern 'if \[ "\$DEPLOY_MODE" = "relay" \]; then\s+setup_port_forwarding\s+fi' -Message '60-firewall.sh must install relay forwarding rules after local relay ports are known and before UFW opens them.'
@@ -283,9 +287,14 @@ Assert-Contains -Text $readme -Needle 'Transparent relay forwarding is enabled' 
 Assert-Contains -Text $readme -Needle 'cleanup удаляет только owned forwarding-правила' -Message 'readme.md must document precise uninstall cleanup semantics.'
 Assert-NotMatch -Text $readme -Pattern 'Stage-5 limitations|Ограничения этапа 5|future transparent forwarding|будущего transparent forwarding|Transparent port forwarding .*not enabled|planned for the next stage' -Message 'readme.md must not describe relay forwarding as a future stage after stage 7.'
 Assert-Contains -Text $setupIndex -Needle 'lifecycle uninstall' -Message 'src/setup/README.md must mention lifecycle uninstall alignment after stage 7.'
-Assert-Contains -Text $setupMeta -Needle 'версии 3.0.6' -Message 'setup.sh.meta.md must describe the stage-7 assembled artifact version.'
+Assert-Contains -Text $setupMeta -Needle 'версии 3.0.7' -Message 'setup.sh.meta.md must describe the current assembled artifact version.'
 Assert-Contains -Text $uninstallMeta -Needle 'точечно удаляет owned forwarding-правила' -Message 'uninstall.sh.meta.md must describe precise forwarding cleanup.'
 
 Assert-NotMatch -Text $setup -Pattern 'CASCADE_|VLESS_LINK|ADG_HTTP_PROXY_PORT|XRAY_' -Message 'setup.sh credentials and runtime must remain free of legacy cascade/Xray fields.'
+
+if ($script:Failures.Count -gt 0) {
+    Write-Error ("script-regressions: {0} failure(s):`n- {1}" -f $script:Failures.Count, ($script:Failures -join "`n- "))
+    exit 1
+}
 
 Write-Host 'script-regressions: OK'

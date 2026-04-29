@@ -27,8 +27,9 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.6"
+SCRIPT_VERSION="3.0.7"
 CREDS_FILE="/root/.vpn-credentials"
+FORWARDING_STATE_FILE="/root/.vpn-forwarding-rules"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
 DEPLOY_MODE="target"
@@ -297,54 +298,158 @@ install_3x_ui_interactive() {
     warn "Скрипт намеренно не делает silent install и не меняет конфигурацию 3x-ui автоматически."
 }
 
-prompt_target_details() {
-    [ -c /dev/tty ] || err "Для настройки relay требуется интерактивный ввод target-параметров через /dev/tty."
+is_yes_answer() {
+    case "$1" in
+        y|Y|yes|YES|Yes|д|Д|да|ДА|Да) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
-    if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
-        TARGET_IP=$(read_cred_value "TARGET_IP" "$CREDS_FILE")
-        TARGET_AWG_PORT=$(read_cred_value "TARGET_AWG_PORT" "$CREDS_FILE")
-        TARGET_REALITY_PORT=$(read_cred_value "TARGET_REALITY_PORT" "$CREDS_FILE")
-        TARGET_DNS_PORT=$(read_cred_value "TARGET_DNS_PORT" "$CREDS_FILE")
-        RELAY_FWD_AWG_PORT=$(read_cred_value "RELAY_FWD_AWG_PORT" "$CREDS_FILE")
-        RELAY_FWD_REALITY_PORT=$(read_cred_value "RELAY_FWD_REALITY_PORT" "$CREDS_FILE")
+append_forwarding_rule() {
+    local rule_target_ip="$1"
+    local rule_target_port="$2"
+    local rule_proto="$3"
+    local rule_external_port="${4:-}"
+    local rule_id="${5:-}"
+    local rule_line
+
+    rule_external_port="${rule_external_port:-$rule_target_port}"
+    rule_id="${rule_id:-$(make_forwarding_rule_id "$rule_target_ip" "$rule_target_port" "$rule_proto" "$rule_external_port")}"
+    rule_line="${rule_target_ip}|${rule_target_port}|${rule_proto}|${rule_external_port}|${rule_id}"
+
+    if printf '%s\n' "${PORT_FORWARDING_RULES:-}" | grep -Fxq "$rule_line"; then
+        return 0
     fi
 
-    TARGET_AWG_PORT="${TARGET_AWG_PORT:-53}"
-    TARGET_REALITY_PORT="${TARGET_REALITY_PORT:-443}"
+    if [ -n "${PORT_FORWARDING_RULES:-}" ]; then
+        PORT_FORWARDING_RULES="${PORT_FORWARDING_RULES}
+${rule_line}"
+    else
+        PORT_FORWARDING_RULES="$rule_line"
+    fi
+}
 
-    log "Relay: ввод параметров target-сервера для будущего forwarding."
+make_forwarding_rule_id() {
+    printf '%s-%s-%s-%s' "$1" "$2" "$3" "$4" | tr '.:/|' '----' | tr -cd 'A-Za-z0-9_-'
+}
 
-    local entered_value
+load_forwarding_rules_state() {
+    PORT_FORWARDING_RULES=""
+    PORT_FORWARDING_ENABLED=0
+
+    if [ -f "${FORWARDING_STATE_FILE:-}" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+        while IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id _rest; do
+            case "$rule_target_ip" in ''|\#*) continue ;; esac
+            [ -n "$rule_target_port" ] || continue
+            [ -n "$rule_proto" ] || rule_proto="both"
+            [ -n "$rule_external_port" ] || rule_external_port="$rule_target_port"
+            append_forwarding_rule "$rule_target_ip" "$rule_target_port" "$rule_proto" "$rule_external_port" "$rule_id"
+        done < "$FORWARDING_STATE_FILE"
+    fi
+
+    if [ -z "${PORT_FORWARDING_RULES:-}" ] && [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+        local legacy_target_ip
+        local legacy_awg_port
+        local legacy_reality_port
+        local legacy_fwd_awg_port
+        local legacy_fwd_reality_port
+
+        legacy_target_ip=$(read_cred_value "TARGET_IP" "$CREDS_FILE")
+        legacy_awg_port=$(read_cred_value "TARGET_AWG_PORT" "$CREDS_FILE")
+        legacy_reality_port=$(read_cred_value "TARGET_REALITY_PORT" "$CREDS_FILE")
+        legacy_fwd_awg_port=$(read_cred_value "RELAY_FWD_AWG_PORT" "$CREDS_FILE")
+        legacy_fwd_reality_port=$(read_cred_value "RELAY_FWD_REALITY_PORT" "$CREDS_FILE")
+
+        if [ -n "$legacy_target_ip" ]; then
+            [ -n "$legacy_awg_port" ] && append_forwarding_rule "$legacy_target_ip" "$legacy_awg_port" "udp" "${legacy_fwd_awg_port:-$legacy_awg_port}" "legacy-awg"
+            [ -n "$legacy_reality_port" ] && append_forwarding_rule "$legacy_target_ip" "$legacy_reality_port" "tcp" "${legacy_fwd_reality_port:-$legacy_reality_port}" "legacy-reality"
+        fi
+    fi
+
+    [ -n "${PORT_FORWARDING_RULES:-}" ] && PORT_FORWARDING_ENABLED=1
+}
+
+save_forwarding_rules_state() {
+    if [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ] && [ -n "${PORT_FORWARDING_RULES:-}" ]; then
+        printf '%s\n' "${PORT_FORWARDING_RULES}" > "$FORWARDING_STATE_FILE"
+        chmod 600 "$FORWARDING_STATE_FILE"
+        return 0
+    fi
+
+    rm -f "$FORWARDING_STATE_FILE"
+}
+
+collect_forwarding_rules() {
+    [ -c /dev/tty ] || err "Для настройки forwarding требуется интерактивный ввод через /dev/tty."
+
+    local answer
+    local target_ip
+    local target_port
+    local proto
+
+    PORT_FORWARDING_RULES=""
+    PORT_FORWARDING_ENABLED=0
+
+    printf 'Настроить проброс портов с этого сервера? [y/N]: ' >/dev/tty
+    IFS= read -r answer </dev/tty
+    answer=$(trim_cr_value "$answer")
+    if ! is_yes_answer "$answer"; then
+        log "Port forwarding не настроен: оператор выбрал обычный direct-режим."
+        return 0
+    fi
+
+    PORT_FORWARDING_ENABLED=1
+
     while true; do
-        printf 'Target IP [%s]: ' "${TARGET_IP:-required}" >/dev/tty
-        IFS= read -r entered_value </dev/tty
-        entered_value=$(trim_cr_value "$entered_value")
-        [ -n "$entered_value" ] && TARGET_IP="$entered_value"
-        [ -n "${TARGET_IP:-}" ] && break
+        target_ip=""
+        while true; do
+            printf 'Target IP: ' >/dev/tty
+            IFS= read -r target_ip </dev/tty
+            target_ip=$(trim_cr_value "$target_ip")
+            [ -n "$target_ip" ] && break
+            warn "Target IP обязателен для forwarding."
+        done
+
+        while true; do
+            target_port=""
+            while true; do
+                printf 'Target port: ' >/dev/tty
+                IFS= read -r target_port </dev/tty
+                target_port=$(trim_cr_value "$target_port")
+                case "$target_port" in
+                    ''|*[!0-9]*) warn "Target port должен быть числом." ;;
+                    *) break ;;
+                esac
+            done
+
+            printf 'Protocol [tcp, udp или both] (default both): ' >/dev/tty
+            IFS= read -r proto </dev/tty
+            proto=$(trim_cr_value "$proto")
+            proto="${proto:-both}"
+            case "$proto" in
+                tcp|udp|both) ;;
+                *) warn "Неизвестный protocol '${proto}', используется both."; proto="both" ;;
+            esac
+
+            append_forwarding_rule "$target_ip" "$target_port" "$proto"
+
+            printf 'Добавить еще порт для этого target? [y/N]: ' >/dev/tty
+            IFS= read -r answer </dev/tty
+            answer=$(trim_cr_value "$answer")
+            is_yes_answer "$answer" || break
+        done
+
+        printf 'Добавить еще target-сервер? [y/N]: ' >/dev/tty
+        IFS= read -r answer </dev/tty
+        answer=$(trim_cr_value "$answer")
+        is_yes_answer "$answer" || break
     done
+}
 
-    printf 'Target AWG UDP port [%s]: ' "$TARGET_AWG_PORT" >/dev/tty
-    IFS= read -r entered_value </dev/tty
-    entered_value=$(trim_cr_value "$entered_value")
-    [ -n "$entered_value" ] && TARGET_AWG_PORT="$entered_value"
-
-    printf 'Target Reality TCP port [%s]: ' "$TARGET_REALITY_PORT" >/dev/tty
-    IFS= read -r entered_value </dev/tty
-    entered_value=$(trim_cr_value "$entered_value")
-    [ -n "$entered_value" ] && TARGET_REALITY_PORT="$entered_value"
-
-    while true; do
-        printf 'Target DNS port [%s]: ' "${TARGET_DNS_PORT:-required}" >/dev/tty
-        IFS= read -r entered_value </dev/tty
-        entered_value=$(trim_cr_value "$entered_value")
-        [ -n "$entered_value" ] && TARGET_DNS_PORT="$entered_value"
-        [ -n "${TARGET_DNS_PORT:-}" ] && break
-    done
-
-    case "$TARGET_AWG_PORT:$TARGET_REALITY_PORT:$TARGET_DNS_PORT" in
-        *[!0-9:]*|'') err "Target-порты должны быть числовыми: AWG=${TARGET_AWG_PORT}, Reality=${TARGET_REALITY_PORT}, DNS=${TARGET_DNS_PORT}." ;;
-    esac
-
+prompt_target_details() {
+    log "Relay: интерактивная настройка optional port forwarding."
+    load_forwarding_rules_state
+    collect_forwarding_rules
 }
 
 is_relay_forward_port_available() {
@@ -425,35 +530,86 @@ persist_iptables_rules() {
 
 ensure_relay_forward_ports() {
     [ "$DEPLOY_MODE" = "relay" ] || return 0
+    [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ] || return 0
+    [ -n "${PORT_FORWARDING_RULES:-}" ] || return 0
 
-    RELAY_FWD_AWG_PORT=$(choose_relay_forward_port "${RELAY_FWD_AWG_PORT:-}" "udp")
-    RELAY_FWD_REALITY_PORT=$(choose_relay_forward_port "${RELAY_FWD_REALITY_PORT:-}" "tcp")
+    local normalized_rules=""
+    local rule_line
+    local rule_target_ip
+    local rule_target_port
+    local rule_proto
+    local rule_external_port
+    local rule_id
+
+    while IFS= read -r rule_line; do
+        [ -n "$rule_line" ] || continue
+        IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id <<EOF
+$rule_line
+EOF
+        rule_proto="${rule_proto:-both}"
+        rule_external_port="${rule_external_port:-$rule_target_port}"
+        rule_id="${rule_id:-$(make_forwarding_rule_id "$rule_target_ip" "$rule_target_port" "$rule_proto" "$rule_external_port")}"
+
+        if [ -z "$normalized_rules" ]; then
+            normalized_rules="${rule_target_ip}|${rule_target_port}|${rule_proto}|${rule_external_port}|${rule_id}"
+        else
+            normalized_rules="${normalized_rules}
+${rule_target_ip}|${rule_target_port}|${rule_proto}|${rule_external_port}|${rule_id}"
+        fi
+    done <<EOF
+${PORT_FORWARDING_RULES}
+EOF
+
+    PORT_FORWARDING_RULES="$normalized_rules"
 }
 
 cleanup_port_forwarding() {
     [ "$DEPLOY_MODE" = "relay" ] || return 0
-    [ -n "${TARGET_IP:-}" ] || return 0
-    [ -n "${RELAY_FWD_AWG_PORT:-}" ] || [ -n "${RELAY_FWD_REALITY_PORT:-}" ] || return 0
+    [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ] || return 0
+    [ -n "${PORT_FORWARDING_RULES:-}" ] || return 0
 
     iptables_delete_rule filter FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "3x-awg relay fwd established" -j ACCEPT
 
-    if [ -n "${RELAY_FWD_AWG_PORT:-}" ]; then
-        iptables_delete_rule nat PREROUTING -i "$PUB_INT" -p udp --dport "$RELAY_FWD_AWG_PORT" -m comment --comment "3x-awg relay fwd awg prerouting" -j DNAT --to-destination "${TARGET_IP}:${TARGET_AWG_PORT}"
-        iptables_delete_rule filter FORWARD -i "$PUB_INT" -p udp -d "$TARGET_IP" --dport "$TARGET_AWG_PORT" -m comment --comment "3x-awg relay fwd awg forward" -j ACCEPT
-        iptables_delete_rule nat POSTROUTING -p udp -d "$TARGET_IP" --dport "$TARGET_AWG_PORT" -m comment --comment "3x-awg relay fwd awg postrouting" -j MASQUERADE
-    fi
+    local rule_line
+    local rule_target_ip
+    local rule_target_port
+    local rule_proto
+    local rule_external_port
+    local rule_id
+    local fwd_proto
+    local rule_comment
 
-    if [ -n "${RELAY_FWD_REALITY_PORT:-}" ]; then
-        iptables_delete_rule nat PREROUTING -i "$PUB_INT" -p tcp --dport "$RELAY_FWD_REALITY_PORT" -m comment --comment "3x-awg relay fwd reality prerouting" -j DNAT --to-destination "${TARGET_IP}:${TARGET_REALITY_PORT}"
-        iptables_delete_rule filter FORWARD -i "$PUB_INT" -p tcp -d "$TARGET_IP" --dport "$TARGET_REALITY_PORT" -m comment --comment "3x-awg relay fwd reality forward" -j ACCEPT
-        iptables_delete_rule nat POSTROUTING -p tcp -d "$TARGET_IP" --dport "$TARGET_REALITY_PORT" -m comment --comment "3x-awg relay fwd reality postrouting" -j MASQUERADE
-    fi
+    while IFS= read -r rule_line; do
+        [ -n "$rule_line" ] || continue
+        IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id <<EOF
+$rule_line
+EOF
+        rule_external_port="${rule_external_port:-$rule_target_port}"
+        rule_id="${rule_id:-$(make_forwarding_rule_id "$rule_target_ip" "$rule_target_port" "$rule_proto" "$rule_external_port")}"
+        for fwd_proto in $(forwarding_rule_protocols "$rule_proto"); do
+            rule_comment="3x-awg-fwd:${rule_id}:${fwd_proto}"
+            iptables_delete_rule nat PREROUTING -i "$PUB_INT" -p "$fwd_proto" --dport "$rule_external_port" -m comment --comment "$rule_comment prerouting" -j DNAT --to-destination "${rule_target_ip}:${rule_target_port}"
+            iptables_delete_rule filter FORWARD -i "$PUB_INT" -p "$fwd_proto" -d "$rule_target_ip" --dport "$rule_target_port" -m comment --comment "$rule_comment forward" -j ACCEPT
+            iptables_delete_rule nat POSTROUTING -p "$fwd_proto" -d "$rule_target_ip" --dport "$rule_target_port" -m comment --comment "$rule_comment postrouting" -j MASQUERADE
+        done
+    done <<EOF
+${PORT_FORWARDING_RULES}
+EOF
+}
+
+forwarding_rule_protocols() {
+    case "$1" in
+        tcp) echo "tcp" ;;
+        udp) echo "udp" ;;
+        both|'') echo "tcp udp" ;;
+        *) echo "tcp udp" ;;
+    esac
 }
 
 setup_port_forwarding() {
     [ "$DEPLOY_MODE" = "relay" ] || return 0
-
-    [ -n "${TARGET_IP:-}" ] || err "TARGET_IP не задан для relay forwarding."
+    [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ] || return 0
+    [ -n "${PORT_FORWARDING_RULES:-}" ] || return 0
 
     mark_step "Relay forwarding: cleanup old owned rules"
     cleanup_port_forwarding
@@ -461,15 +617,36 @@ setup_port_forwarding() {
     ensure_relay_forward_ports
 
     mark_step "Relay forwarding: install transparent NAT rules"
-    iptables_ensure_rule nat PREROUTING -i "$PUB_INT" -p udp --dport "$RELAY_FWD_AWG_PORT" -m comment --comment "3x-awg relay fwd awg prerouting" -j DNAT --to-destination "${TARGET_IP}:${TARGET_AWG_PORT}"
-    iptables_ensure_rule nat PREROUTING -i "$PUB_INT" -p tcp --dport "$RELAY_FWD_REALITY_PORT" -m comment --comment "3x-awg relay fwd reality prerouting" -j DNAT --to-destination "${TARGET_IP}:${TARGET_REALITY_PORT}"
     iptables_ensure_rule filter FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "3x-awg relay fwd established" -j ACCEPT
-    iptables_ensure_rule filter FORWARD -i "$PUB_INT" -p udp -d "$TARGET_IP" --dport "$TARGET_AWG_PORT" -m comment --comment "3x-awg relay fwd awg forward" -j ACCEPT
-    iptables_ensure_rule filter FORWARD -i "$PUB_INT" -p tcp -d "$TARGET_IP" --dport "$TARGET_REALITY_PORT" -m comment --comment "3x-awg relay fwd reality forward" -j ACCEPT
-    iptables_ensure_rule nat POSTROUTING -p udp -d "$TARGET_IP" --dport "$TARGET_AWG_PORT" -m comment --comment "3x-awg relay fwd awg postrouting" -j MASQUERADE
-    iptables_ensure_rule nat POSTROUTING -p tcp -d "$TARGET_IP" --dport "$TARGET_REALITY_PORT" -m comment --comment "3x-awg relay fwd reality postrouting" -j MASQUERADE
+
+    local rule_line
+    local rule_target_ip
+    local rule_target_port
+    local rule_proto
+    local rule_external_port
+    local rule_id
+    local fwd_proto
+    local rule_comment
+
+    while IFS= read -r rule_line; do
+        [ -n "$rule_line" ] || continue
+        IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id <<EOF
+$rule_line
+EOF
+        rule_external_port="${rule_external_port:-$rule_target_port}"
+        rule_id="${rule_id:-$(make_forwarding_rule_id "$rule_target_ip" "$rule_target_port" "$rule_proto" "$rule_external_port")}"
+        for fwd_proto in $(forwarding_rule_protocols "$rule_proto"); do
+            rule_comment="3x-awg-fwd:${rule_id}:${fwd_proto}"
+            iptables_ensure_rule nat PREROUTING -i "$PUB_INT" -p "$fwd_proto" --dport "$rule_external_port" -m comment --comment "$rule_comment prerouting" -j DNAT --to-destination "${rule_target_ip}:${rule_target_port}"
+            iptables_ensure_rule filter FORWARD -i "$PUB_INT" -p "$fwd_proto" -d "$rule_target_ip" --dport "$rule_target_port" -m comment --comment "$rule_comment forward" -j ACCEPT
+            iptables_ensure_rule nat POSTROUTING -p "$fwd_proto" -d "$rule_target_ip" --dport "$rule_target_port" -m comment --comment "$rule_comment postrouting" -j MASQUERADE
+        done
+    done <<EOF
+${PORT_FORWARDING_RULES}
+EOF
 
     persist_iptables_rules
+    save_forwarding_rules_state
 }
 
 # ==============================================================================
@@ -875,9 +1052,16 @@ fi
 ufw allow ${AWG_PORT}/udp
 if [ "$DEPLOY_MODE" = "relay" ]; then
     mark_step "Firewall: relay forward allow external AWG"
-    ufw allow ${RELAY_FWD_AWG_PORT}/udp
+    while IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id; do
+        [ -n "$rule_target_ip" ] || continue
+        rule_external_port="${rule_external_port:-$rule_target_port}"
+        for fwd_proto in $(forwarding_rule_protocols "$rule_proto"); do
+            ufw allow ${rule_external_port}/${fwd_proto}
+        done
+    done <<EOF
+${PORT_FORWARDING_RULES:-}
+EOF
     mark_step "Firewall: relay forward allow external Reality"
-    ufw allow ${RELAY_FWD_REALITY_PORT}/tcp
 fi
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
 if [ "$DEPLOY_MODE" = "relay" ]; then
@@ -886,6 +1070,8 @@ else
     mark_step "Firewall: target allow AdGuardHome DNS from awg0"
 fi
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
+ufw allow ${ADG_DNS_PORT}/tcp
+ufw allow ${ADG_DNS_PORT}/udp
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
 if [ "$DEPLOY_MODE" = "relay" ]; then
@@ -977,8 +1163,11 @@ TARGET_REALITY_PORT=${TARGET_REALITY_PORT}
 TARGET_DNS_PORT=${TARGET_DNS_PORT}
 RELAY_FWD_AWG_PORT=${RELAY_FWD_AWG_PORT}
 RELAY_FWD_REALITY_PORT=${RELAY_FWD_REALITY_PORT}
+PORT_FORWARDING_ENABLED=${PORT_FORWARDING_ENABLED:-0}
+FORWARDING_STATE_FILE=${FORWARDING_STATE_FILE}
 CREDS
 chmod 600 "$CREDS_FILE"
+save_forwarding_rules_state
 
 
 log "Установка и настройка успешно завершены!"
@@ -1007,13 +1196,18 @@ else
 
     echo -e "\n${GREEN}Relay-forward endpoints:${RESET}"
     echo -e "Future relay-forward endpoints из прошлых этапов теперь активны."
-    echo -e "Внешний AWG forward: ${SERVER_IP}:${RELAY_FWD_AWG_PORT}/udp -> ${TARGET_IP}:${TARGET_AWG_PORT}/udp"
-    echo -e "Внешний Reality forward: ${SERVER_IP}:${RELAY_FWD_REALITY_PORT}/tcp -> ${TARGET_IP}:${TARGET_REALITY_PORT}/tcp"
-    echo -e "Target для будущего forwarding:"
-    echo -e "Target IP: ${TARGET_IP}"
-    echo -e "Target AWG: ${TARGET_IP}:${TARGET_AWG_PORT}/udp"
-    echo -e "Target Reality: ${TARGET_IP}:${TARGET_REALITY_PORT}/tcp"
-    echo -e "Target DNS: ${TARGET_IP}:${TARGET_DNS_PORT}"
+    if [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ] && [ -n "${PORT_FORWARDING_RULES:-}" ]; then
+        while IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id; do
+            [ -n "$rule_target_ip" ] || continue
+            rule_external_port="${rule_external_port:-$rule_target_port}"
+            echo -e "${SERVER_IP}:${rule_external_port}/${rule_proto} -> ${rule_target_ip}:${rule_target_port}/${rule_proto}"
+        done <<EOF
+${PORT_FORWARDING_RULES}
+EOF
+    else
+        echo -e "Проброс портов не настроен."
+    fi
+    echo -e "Target для будущего forwarding: см. ${FORWARDING_STATE_FILE}"
 fi
 
 echo -e "\n${GREEN}AdGuardHome:${RESET}"

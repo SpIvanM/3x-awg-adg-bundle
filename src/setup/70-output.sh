@@ -50,8 +50,11 @@ TARGET_REALITY_PORT=${TARGET_REALITY_PORT}
 TARGET_DNS_PORT=${TARGET_DNS_PORT}
 RELAY_FWD_AWG_PORT=${RELAY_FWD_AWG_PORT}
 RELAY_FWD_REALITY_PORT=${RELAY_FWD_REALITY_PORT}
+PORT_FORWARDING_ENABLED=${PORT_FORWARDING_ENABLED:-0}
+FORWARDING_STATE_FILE=${FORWARDING_STATE_FILE}
 CREDS
 chmod 600 "$CREDS_FILE"
+save_forwarding_rules_state
 
 
 log "Установка и настройка успешно завершены!"
@@ -80,13 +83,18 @@ else
 
     echo -e "\n${GREEN}Relay-forward endpoints:${RESET}"
     echo -e "Future relay-forward endpoints из прошлых этапов теперь активны."
-    echo -e "Внешний AWG forward: ${SERVER_IP}:${RELAY_FWD_AWG_PORT}/udp -> ${TARGET_IP}:${TARGET_AWG_PORT}/udp"
-    echo -e "Внешний Reality forward: ${SERVER_IP}:${RELAY_FWD_REALITY_PORT}/tcp -> ${TARGET_IP}:${TARGET_REALITY_PORT}/tcp"
-    echo -e "Target для будущего forwarding:"
-    echo -e "Target IP: ${TARGET_IP}"
-    echo -e "Target AWG: ${TARGET_IP}:${TARGET_AWG_PORT}/udp"
-    echo -e "Target Reality: ${TARGET_IP}:${TARGET_REALITY_PORT}/tcp"
-    echo -e "Target DNS: ${TARGET_IP}:${TARGET_DNS_PORT}"
+    if [ "${PORT_FORWARDING_ENABLED:-0}" -eq 1 ] && [ -n "${PORT_FORWARDING_RULES:-}" ]; then
+        while IFS='|' read -r rule_target_ip rule_target_port rule_proto rule_external_port rule_id; do
+            [ -n "$rule_target_ip" ] || continue
+            rule_external_port="${rule_external_port:-$rule_target_port}"
+            echo -e "${SERVER_IP}:${rule_external_port}/${rule_proto} -> ${rule_target_ip}:${rule_target_port}/${rule_proto}"
+        done <<EOF
+${PORT_FORWARDING_RULES}
+EOF
+    else
+        echo -e "Проброс портов не настроен."
+    fi
+    echo -e "Target для будущего forwarding: см. ${FORWARDING_STATE_FILE}"
 fi
 
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
