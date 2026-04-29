@@ -1,10 +1,10 @@
 ﻿<#
 Name: script regression checks
-Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay local stack, the stage-6 relay transparent forwarding, and the stage-7 lifecycle/docs release sync.
+Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay local stack, the stage-6 relay transparent forwarding, the public AdGuardHome DNS endpoint, universal forwarding guardrails, and the stage-7 lifecycle/docs release sync.
 Usage: powershell -File .\script-regressions.ps1
-Behavior: Reads setup.sh, uninstall.sh, source module index, top-level README, metadata, and the build script and fails if the modular source layout, target topology, relay local stack, relay transparent forwarding, uninstall lifecycle, or release documentation regresses.
+Behavior: Reads setup.sh, uninstall.sh, source module index, top-level README, metadata, and the build script and fails if the modular source layout, target topology, relay local stack, relay transparent forwarding, public DNS exposure, universal forwarding model, uninstall lifecycle, or release documentation regresses.
 Returns: Exit code 0 on pass, non-zero on regression.
-Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay flow, the stage-6 transparent forwarding, or stage-7 lifecycle/docs release sync are absent.
+Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, the stage-5 relay flow, the stage-6 transparent forwarding, public AdGuardHome DNS UFW openings, universal multi-target forwarding, or stage-7 lifecycle/docs release sync are absent.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -19,8 +19,10 @@ $uninstall = & $readText -LiteralPath (Join-Path $repoRoot 'uninstall.sh')
 $buildSetup = & $readText -LiteralPath (Join-Path $repoRoot 'tools\build-setup.ps1')
 $setupIndex = & $readText -LiteralPath (Join-Path $sourceRoot 'README.md')
 $readme = & $readText -LiteralPath (Join-Path $repoRoot 'readme.md')
-$setupMeta = & $readText -LiteralPath (Join-Path $repoRoot 'setup.sh.meta.md')
-$uninstallMeta = & $readText -LiteralPath (Join-Path $repoRoot 'uninstall.sh.meta.md')
+$setupMetaPath = Join-Path $repoRoot 'setup.sh.meta.md'
+$uninstallMetaPath = Join-Path $repoRoot 'uninstall.sh.meta.md'
+$setupMeta = if (Test-Path -LiteralPath $setupMetaPath) { & $readText -LiteralPath $setupMetaPath } else { '' }
+$uninstallMeta = if (Test-Path -LiteralPath $uninstallMetaPath) { & $readText -LiteralPath $uninstallMetaPath } else { '' }
 
 function Read-OptionalText {
     param(
@@ -217,6 +219,8 @@ Assert-Contains -Text $outputSource -Needle 'DNS endpoint: ${SERVER_IP}:${ADG_DN
 Assert-Contains -Text $firewallSource -Needle 'Firewall: target allow Reality 443/tcp' -Message '60-firewall.sh must include a target-specific Reality firewall marker.'
 Assert-Contains -Text $firewallSource -Needle 'Firewall: target allow AWG 53/udp' -Message '60-firewall.sh must include a target-specific AWG firewall marker.'
 Assert-Contains -Text $firewallSource -Needle 'Firewall: target allow AdGuardHome web' -Message '60-firewall.sh must include a target-specific AdGuardHome web marker.'
+Assert-Match -Text $firewallSource -Pattern 'ufw\s+allow\s+"?\$\{ADG_DNS_PORT\}/tcp"?' -Message '60-firewall.sh must open the public AdGuardHome DNS TCP port via UFW.'
+Assert-Match -Text $firewallSource -Pattern 'ufw\s+allow\s+"?\$\{ADG_DNS_PORT\}/udp"?' -Message '60-firewall.sh must open the public AdGuardHome DNS UDP port via UFW.'
 Assert-Match -Text $setupIndex -Pattern '40-awg\.sh.*53/udp.*MTU 1280' -Message 'src/setup/README.md must document the target AWG port and MTU.'
 Assert-Match -Text $setupIndex -Pattern '60-firewall\.sh.*target.*Reality 443.*AWG 53' -Message 'src/setup/README.md must document target firewall openings.'
 Assert-Match -Text $setupIndex -Pattern '70-output\.sh.*Target handoff.*relay' -Message 'src/setup/README.md must document target relay handoff output.'
@@ -239,6 +243,12 @@ Assert-Match -Text $setupIndex -Pattern '70-output\.sh.*Relay local direct stack
 
 Assert-Match -Text $forwardingHelpers -Pattern 'setup_port_forwarding\(\)' -Message '14-port-forwarding-helpers.sh must define setup_port_forwarding for relay.'
 Assert-Match -Text $forwardingHelpers -Pattern 'cleanup_port_forwarding\(\)' -Message '14-port-forwarding-helpers.sh must define cleanup_port_forwarding for relay.'
+Assert-Match -Text $forwardingHelpers -Pattern 'FORWARDING_RULES|PORT_FORWARDING_RULES|RELAY_FORWARDING_RULES' -Message '14-port-forwarding-helpers.sh must store forwarding as a reusable rule list for multiple arbitrary ports and targets.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\).*(for|while).*(FORWARDING_RULES|PORT_FORWARDING_RULES|RELAY_FORWARDING_RULES)' -Message 'setup_port_forwarding must iterate over the forwarding rule list, not only fixed AWG/Reality ports.'
+Assert-Match -Text $forwardingHelpers -Pattern 'rule_target_ip|target_ip_from_rule|fwd_target_ip' -Message 'setup_port_forwarding must use a per-rule target IP so different rules can point to different targets.'
+Assert-Match -Text $forwardingHelpers -Pattern 'rule_target_port|target_port_from_rule|fwd_target_port' -Message 'setup_port_forwarding must use a per-rule target port so arbitrary service ports can be forwarded.'
+Assert-Match -Text $forwardingHelpers -Pattern 'rule_external_port|external_port_from_rule|fwd_external_port' -Message 'setup_port_forwarding must use a per-rule external port for each forwarded service.'
+Assert-Match -Text $forwardingHelpers -Pattern 'rule_proto|proto_from_rule|fwd_proto' -Message 'setup_port_forwarding must use a per-rule protocol so TCP, UDP, and mixed forwarding can be represented.'
 foreach ($forwardField in @('RELAY_FWD_AWG_PORT', 'RELAY_FWD_REALITY_PORT')) {
     Assert-Match -Text $forwardingHelpers -Pattern ('read_cred_value "{0}"' -f $forwardField) -Message "14-port-forwarding-helpers.sh must reuse existing $forwardField from credentials."
     Assert-Contains -Text $outputSource -Needle "$forwardField=`${$forwardField}" -Message "70-output.sh must persist $forwardField."
