@@ -120,8 +120,8 @@ output_source       = read_text(os.path.join(SOURCE_ROOT, "70-output.sh"))
 # Stage 1: bootstrap baseline
 # ---------------------------------------------------------------------------
 
-assert_match(setup, r'SCRIPT_VERSION="3\.1\.1"',
-    "setup.sh must expose installer version 3.1.1 after the universal forwarding firewall rebuild.")
+assert_match(setup, r'SCRIPT_VERSION="3\.1\.2"',
+    "setup.sh must expose installer version 3.1.2 after the universal forwarding firewall rebuild.")
 assert_match(setup, r'DEPLOY_MODE="target"',
     "setup.sh must default DEPLOY_MODE to target.")
 assert_match(setup, r'--mode\)',
@@ -200,6 +200,10 @@ assert_contains(three_x_helpers, "3x-ui requires manual interactive configuratio
 assert_not_match(three_x_helpers,
     r"install_xray_core\(\)|resolve_xray_bin\(\)|generate_reality_keys\(\)|write_xray_config\(\)",
     "13-3x-helpers.sh must drop legacy Xray helper functions in stage 3.")
+assert_match(three_x_helpers, r"warn.*Официальный installer 3x-ui завершился с ошибкой",
+    "13-3x-helpers.sh must use a warning instead of a hard error if the 3x-ui installer fails.")
+assert_match(common_helpers, r"warn.*3x-ui/Reality.*пока не слушает",
+    "10-common.sh must use a soft warning if the Reality port is not listening during stack validation.")
 assert_not_match(forwarding_helpers,
     r"reset_cascade_state\(\)|parse_cascade_vless_uri\(\)|resolve_cascade_upstream_address\(\)|configure_cascade_mode\(\)",
     "14-port-forwarding-helpers.sh must drop legacy cascade helpers in stage 3.")
@@ -445,7 +449,7 @@ assert_not_match(readme,
     "readme.md must not describe relay forwarding as a future stage after stage 7.")
 assert_contains(setup_index, "lifecycle uninstall",
     "src/setup/README.md must mention lifecycle uninstall alignment after stage 7.")
-assert_contains(setup_meta, "версии 3.1.1",
+assert_contains(setup_meta, "версии 3.1.2",
     "setup.sh.meta.md must describe the current assembled artifact version.")
 assert_contains(uninstall_meta, "точечно удаляет owned forwarding-правила",
     "uninstall.sh.meta.md must describe precise forwarding cleanup.")

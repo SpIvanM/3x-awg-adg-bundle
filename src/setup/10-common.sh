@@ -39,6 +39,10 @@ validate_stack() {
     ss -lunp | grep -Eq ":${AWG_PORT} " || err "AmneziaWG не слушает UDP порт ${AWG_PORT}."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
+    
+    if ! ss -tlnp | grep -Eq ":${REALITY_PORT:-443} "; then
+        warn "3x-ui/Reality (порт ${REALITY_PORT:-443}) пока не слушает. Это нормально, если вы еще не настроили Reality inbound в панели."
+    fi
 }
 
 ensure_swapfile() {

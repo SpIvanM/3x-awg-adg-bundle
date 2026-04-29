@@ -27,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.1.1"
+SCRIPT_VERSION="3.1.2"
 CREDS_FILE="/root/.vpn-credentials"
 FORWARDING_STATE_FILE="/root/.vpn-forwarding-rules"
 LOG_FILE="/var/log/vpn-setup.log"
@@ -148,6 +148,10 @@ validate_stack() {
     ss -lunp | grep -Eq ":${AWG_PORT} " || err "AmneziaWG не слушает UDP порт ${AWG_PORT}."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
+    
+    if ! ss -tlnp | grep -Eq ":${REALITY_PORT:-443} "; then
+        warn "3x-ui/Reality (порт ${REALITY_PORT:-443}) пока не слушает. Это нормально, если вы еще не настроили Reality inbound в панели."
+    fi
 }
 
 ensure_swapfile() {
@@ -290,7 +294,7 @@ install_3x_ui_interactive() {
 
     log "Запуск официального интерактивного installer 3x-ui..."
     if ! bash <(curl -fsSL "$THREE_X_UI_INSTALLER_URL") </dev/tty >/dev/tty 2>/dev/tty; then
-        err "Официальный installer 3x-ui завершился с ошибкой."
+        warn "Официальный installer 3x-ui завершился с ошибкой. Это не критично для работы AWG и AdGuardHome."
     fi
 
     log "3x-ui requires manual interactive configuration after the installer finishes."

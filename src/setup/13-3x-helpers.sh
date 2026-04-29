@@ -11,7 +11,7 @@ install_3x_ui_interactive() {
 
     log "Запуск официального интерактивного installer 3x-ui..."
     if ! bash <(curl -fsSL "$THREE_X_UI_INSTALLER_URL") </dev/tty >/dev/tty 2>/dev/tty; then
-        err "Официальный installer 3x-ui завершился с ошибкой."
+        warn "Официальный installer 3x-ui завершился с ошибкой. Это не критично для работы AWG и AdGuardHome."
     fi
 
     log "3x-ui requires manual interactive configuration after the installer finishes."
