@@ -44,6 +44,10 @@ AWG_H2=${H2}
 AWG_H3=${H3}
 AWG_H4=${H4}
 AWG_CLIENT_CONF=/root/amnezia_client.conf
+TARGET_IP=${TARGET_IP}
+TARGET_AWG_PORT=${TARGET_AWG_PORT}
+TARGET_REALITY_PORT=${TARGET_REALITY_PORT}
+TARGET_DNS_PORT=${TARGET_DNS_PORT}
 CREDS
 chmod 600 "$CREDS_FILE"
 
@@ -59,11 +63,27 @@ echo -e "Официальный installer 3x-ui уже был запущен и�
 echo -e "Дальнейшая настройка панели, inbound Reality и клиентских ссылок выполняется ${YELLOW}вручную${RESET}."
 echo -e "Если для панели выбран отдельный порт, откройте его в UFW вручную после настройки."
 
-echo -e "\n${GREEN}Target handoff для relay:${RESET}"
-echo -e "IP: ${SERVER_IP}"
-echo -e "AWG: ${SERVER_IP}:53/udp"
-echo -e "Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
-echo -e "DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
+if [ "$DEPLOY_MODE" = "target" ]; then
+    echo -e "\n${GREEN}Target handoff для relay:${RESET}"
+    echo -e "IP: ${SERVER_IP}"
+    echo -e "AWG: ${SERVER_IP}:53/udp"
+    echo -e "Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
+    echo -e "DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
+else
+    echo -e "\n${GREEN}Relay local direct stack:${RESET}"
+    echo -e "IP: ${SERVER_IP}"
+    echo -e "Локальный AWG: ${SERVER_IP}:53/udp"
+    echo -e "Локальный Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
+    echo -e "Локальный DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
+
+    echo -e "\n${GREEN}Future relay-forward endpoints:${RESET}"
+    echo -e "На этом этапе forwarding ещё не включён."
+    echo -e "Target для будущего forwarding:"
+    echo -e "Target IP: ${TARGET_IP}"
+    echo -e "Target AWG: ${TARGET_IP}:${TARGET_AWG_PORT}/udp"
+    echo -e "Target Reality: ${TARGET_IP}:${TARGET_REALITY_PORT}/tcp"
+    echo -e "Target DNS: ${TARGET_IP}:${TARGET_DNS_PORT}"
+fi
 
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"

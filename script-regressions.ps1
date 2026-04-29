@@ -1,10 +1,10 @@
 ﻿<#
 Name: script regression checks
-Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, and the stage-4 target topology.
+Description: Validates the stage-1 bootstrap baseline, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, and the stage-5 relay local stack.
 Usage: powershell -File .\script-regressions.ps1
-Behavior: Reads setup.sh, uninstall.sh, source module index, and the build script and fails if the modular source layout or target topology regresses.
+Behavior: Reads setup.sh, uninstall.sh, source module index, and the build script and fails if the modular source layout, target topology, or relay local stack regresses.
 Returns: Exit code 0 on pass, non-zero on regression.
-Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, or the stage-4 target topology are absent.
+Fails: When required stage-1 bootstrap guardrails, the stage-2 helper split, the stage-3 manual 3x-ui flow, the stage-4 target topology, or the stage-5 relay flow are absent.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -136,12 +136,14 @@ $awgHelpers = $moduleTexts["11-awg-helpers.sh"]
 $aghHelpers = $moduleTexts["12-agh-helpers.sh"]
 $threeXHelpers = $moduleTexts["13-3x-helpers.sh"]
 $forwardingHelpers = $moduleTexts["14-port-forwarding-helpers.sh"]
+$systemSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '20-system.sh')
+$threeXSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '30-xray.sh')
 $awgSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '40-awg.sh')
 $adguardSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '50-adguard.sh')
 $firewallSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '60-firewall.sh')
 $outputSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '70-output.sh')
 
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.3"' -Message 'setup.sh must expose installer version 3.0.3 after the stage-4 rebuild.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.4"' -Message 'setup.sh must expose installer version 3.0.4 after the stage-5 rebuild.'
 Assert-Match -Text $setup -Pattern 'DEPLOY_MODE="target"' -Message 'setup.sh must default DEPLOY_MODE to target.'
 Assert-Match -Text $setup -Pattern '--mode\)' -Message 'setup.sh must accept --mode CLI argument.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version.'
@@ -150,7 +152,6 @@ Assert-Contains -Text $setup -Needle 'Assembled from source modules' -Message 's
 Assert-Match -Text $setup -Pattern 'CURRENT_STEP="bootstrap"' -Message 'setup.sh must initialize the current step tracker early.'
 Assert-Match -Text $setup -Pattern 'mark_step\(\)' -Message 'setup.sh must define a helper for updating the current step.'
 Assert-Contains -Text $setup -Needle '3x-ui requires manual interactive configuration after the installer finishes.' -Message 'setup.sh must include the stage-3 manual 3x-ui handoff notice.'
-Assert-Contains -Text $setup -Needle 'Режим relay будет реализован на следующем этапе. На этапе 3 он намеренно остановлен до начала настройки сервисов.' -Message 'setup.sh must fail fast for relay during stage 3.'
 
 foreach ($module in $orderedModules) {
     Assert-Contains -Text $setup -Needle "src/setup/$module" -Message "setup.sh must list $module in its assembled header."
@@ -192,7 +193,8 @@ Assert-NotMatch -Text $threeXHelpers -Pattern "install_xray_core\(\)|resolve_xra
 Assert-NotMatch -Text $forwardingHelpers -Pattern "reset_cascade_state\(\)|parse_cascade_vless_uri\(\)|resolve_cascade_upstream_address\(\)|configure_cascade_mode\(\)" -Message "14-port-forwarding-helpers.sh must drop legacy cascade helpers in stage 3."
 Assert-NotMatch -Text $setup -Pattern 'install_xray_core|write_xray_config|CASCADE_|ADG_HTTP_PROXY_PORT|VLESS_LINK|install-release\.sh|generate_reality_keys|resolve_xray_bin' -Message 'setup.sh must remove the legacy Xray/cascade implementation during stage 3.'
 Assert-NotMatch -Text $setupIndex -Pattern 'legacy cascade|VLESS|Xray config|bootstrap Xray-core|Reality keys' -Message 'src/setup/README.md must be updated for the stage-3 manual 3x-ui flow.'
-Assert-Match -Text $setup -Pattern 'if \[ "\$DEPLOY_MODE" = "relay" \]; then\s+err "Режим relay будет реализован на следующем этапе\. На этапе 3 он намеренно остановлен до начала настройки сервисов\."\s+fi' -Message 'setup.sh must stop relay before partial service setup during stage 3.'
+Assert-NotMatch -Text $threeXSource -Pattern 'DEPLOY_MODE" = "relay"|Режим relay будет реализован' -Message '30-xray.sh must not fail fast for relay after stage 5.'
+Assert-NotMatch -Text $setup -Pattern 'Режим relay будет реализован на следующем этапе\. На этапе 3 он намеренно остановлен до начала настройки сервисов\.' -Message 'setup.sh must allow relay to run the local stack after stage 5.'
 
 Assert-Match -Text $awgSource -Pattern 'AWG_PORT=53' -Message '40-awg.sh must pin target AmneziaWG to UDP port 53.'
 Assert-Match -Text $setup -Pattern 'ListenPort = \$AWG_PORT' -Message 'setup.sh must write the selected AWG listen port into awg0.conf.'
@@ -215,6 +217,22 @@ Assert-Contains -Text $firewallSource -Needle 'Firewall: target allow AdGuardHom
 Assert-Match -Text $setupIndex -Pattern '40-awg\.sh.*53/udp.*MTU 1280' -Message 'src/setup/README.md must document the target AWG port and MTU.'
 Assert-Match -Text $setupIndex -Pattern '60-firewall\.sh.*target.*Reality 443.*AWG 53' -Message 'src/setup/README.md must document target firewall openings.'
 Assert-Match -Text $setupIndex -Pattern '70-output\.sh.*Target handoff.*relay' -Message 'src/setup/README.md must document target relay handoff output.'
+
+Assert-Match -Text $forwardingHelpers -Pattern 'prompt_target_details\(\)' -Message '14-port-forwarding-helpers.sh must define prompt_target_details for relay.'
+Assert-Contains -Text $forwardingHelpers -Needle '/dev/tty' -Message 'prompt_target_details must read relay target details through /dev/tty.'
+foreach ($targetField in @('TARGET_IP', 'TARGET_AWG_PORT', 'TARGET_REALITY_PORT', 'TARGET_DNS_PORT')) {
+    Assert-Match -Text $forwardingHelpers -Pattern ('read_cred_value "{0}"' -f $targetField) -Message "prompt_target_details must reuse existing $targetField from credentials."
+    Assert-Contains -Text $outputSource -Needle "$targetField=`${$targetField}" -Message "70-output.sh must persist $targetField for future relay forwarding."
+}
+Assert-Match -Text $systemSource -Pattern 'if \[ "\$DEPLOY_MODE" = "relay" \]; then\s+prompt_target_details\s+fi' -Message '20-system.sh must prompt target details before relay local services are configured.'
+Assert-Match -Text $awgSource -Pattern 'AWG_PORT=53' -Message '40-awg.sh must keep relay-local AmneziaWG on UDP port 53.'
+Assert-Contains -Text $outputSource -Needle 'Relay local direct stack' -Message '70-output.sh must print a relay-local direct stack block.'
+Assert-Contains -Text $outputSource -Needle 'Future relay-forward endpoints' -Message '70-output.sh must print a future relay-forward endpoints block.'
+Assert-Contains -Text $outputSource -Needle 'Target для будущего forwarding' -Message '70-output.sh must print the saved target details for future forwarding.'
+Assert-Contains -Text $firewallSource -Needle 'Firewall: relay local allow Reality 443/tcp' -Message '60-firewall.sh must include a relay-local Reality firewall marker.'
+Assert-Contains -Text $firewallSource -Needle 'Firewall: relay local allow AWG 53/udp' -Message '60-firewall.sh must include a relay-local AWG firewall marker.'
+Assert-Match -Text $setupIndex -Pattern '14-port-forwarding-helpers\.sh.*prompt_target_details.*TARGET_IP' -Message 'src/setup/README.md must document relay target detail collection.'
+Assert-Match -Text $setupIndex -Pattern '70-output\.sh.*Relay local direct stack.*Future relay-forward endpoints' -Message 'src/setup/README.md must document relay-specific output.'
 
 Assert-Match -Text $uninstall -Pattern '</dev/tty' -Message 'uninstall.sh must keep reading confirmation from /dev/tty.'
 

@@ -75,3 +75,7 @@ if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
 fi
 
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
+
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    prompt_target_details
+fi

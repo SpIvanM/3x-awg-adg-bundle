@@ -11,14 +11,30 @@ else
 fi
 
 ufw default allow outgoing
-mark_step "Firewall: target allow Reality 443/tcp"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay local allow Reality 443/tcp"
+else
+    mark_step "Firewall: target allow Reality 443/tcp"
+fi
 ufw allow 443/tcp
-mark_step "Firewall: target allow AdGuardHome web"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay local allow AdGuardHome web"
+else
+    mark_step "Firewall: target allow AdGuardHome web"
+fi
 ufw allow ${ADG_PORT}/tcp
-mark_step "Firewall: target allow AWG 53/udp"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay local allow AWG 53/udp"
+else
+    mark_step "Firewall: target allow AWG 53/udp"
+fi
 ufw allow ${AWG_PORT}/udp
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
-mark_step "Firewall: target allow AdGuardHome DNS from awg0"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay local allow AdGuardHome DNS from awg0"
+else
+    mark_step "Firewall: target allow AdGuardHome DNS from awg0"
+fi
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable

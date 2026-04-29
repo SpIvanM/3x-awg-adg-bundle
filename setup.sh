@@ -15,7 +15,7 @@
 #   - src/setup/60-firewall.sh
 #   - src/setup/70-output.sh
 # Usage: curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash [--mode target|relay] [-r | --rotate]
-# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up target-mode AdGuard Home and AmneziaWG endpoints, and launches the official interactive 3x-ui installer. Relay mode is intentionally stopped early until the next stage.
+# Behavior: Updates sysctl, installs OS packages, compiles AmneziaWG kernel module, sets up target or relay-local AdGuard Home and AmneziaWG endpoints, and launches the official interactive 3x-ui installer.
 # Returns: Configured VPN stack with connection details.
 # Fails: If run without root privileges or with an invalid --mode value.
 # ==============================================================================
@@ -27,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.0.3"
+SCRIPT_VERSION="3.0.4"
 CREDS_FILE="/root/.vpn-credentials"
 LOG_FILE="/var/log/vpn-setup.log"
 LAST_RUN_FILE="/root/.vpn-setup-last-run"
@@ -144,7 +144,7 @@ validate_stack() {
     systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0 после настройки."
     systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
 
-    ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
+    ss -lunp | grep -Eq ":${AWG_PORT} " || err "AmneziaWG не слушает UDP порт ${AWG_PORT}."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
 }
@@ -297,7 +297,52 @@ install_3x_ui_interactive() {
     warn "Скрипт намеренно не делает silent install и не меняет конфигурацию 3x-ui автоматически."
 }
 
-# Reserved for relay port-forwarding helpers in the next stages.
+prompt_target_details() {
+    [ -c /dev/tty ] || err "Для настройки relay требуется интерактивный ввод target-параметров через /dev/tty."
+
+    if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
+        TARGET_IP=$(read_cred_value "TARGET_IP" "$CREDS_FILE")
+        TARGET_AWG_PORT=$(read_cred_value "TARGET_AWG_PORT" "$CREDS_FILE")
+        TARGET_REALITY_PORT=$(read_cred_value "TARGET_REALITY_PORT" "$CREDS_FILE")
+        TARGET_DNS_PORT=$(read_cred_value "TARGET_DNS_PORT" "$CREDS_FILE")
+    fi
+
+    TARGET_AWG_PORT="${TARGET_AWG_PORT:-53}"
+    TARGET_REALITY_PORT="${TARGET_REALITY_PORT:-443}"
+
+    log "Relay: ввод параметров target-сервера для будущего forwarding."
+
+    local entered_value
+    while true; do
+        printf 'Target IP [%s]: ' "${TARGET_IP:-required}" >/dev/tty
+        IFS= read -r entered_value </dev/tty
+        entered_value=$(trim_cr_value "$entered_value")
+        [ -n "$entered_value" ] && TARGET_IP="$entered_value"
+        [ -n "${TARGET_IP:-}" ] && break
+    done
+
+    printf 'Target AWG UDP port [%s]: ' "$TARGET_AWG_PORT" >/dev/tty
+    IFS= read -r entered_value </dev/tty
+    entered_value=$(trim_cr_value "$entered_value")
+    [ -n "$entered_value" ] && TARGET_AWG_PORT="$entered_value"
+
+    printf 'Target Reality TCP port [%s]: ' "$TARGET_REALITY_PORT" >/dev/tty
+    IFS= read -r entered_value </dev/tty
+    entered_value=$(trim_cr_value "$entered_value")
+    [ -n "$entered_value" ] && TARGET_REALITY_PORT="$entered_value"
+
+    while true; do
+        printf 'Target DNS port [%s]: ' "${TARGET_DNS_PORT:-required}" >/dev/tty
+        IFS= read -r entered_value </dev/tty
+        entered_value=$(trim_cr_value "$entered_value")
+        [ -n "$entered_value" ] && TARGET_DNS_PORT="$entered_value"
+        [ -n "${TARGET_DNS_PORT:-}" ] && break
+    done
+
+    case "$TARGET_AWG_PORT:$TARGET_REALITY_PORT:$TARGET_DNS_PORT" in
+        *[!0-9:]*|'') err "Target-порты должны быть числовыми: AWG=${TARGET_AWG_PORT}, Reality=${TARGET_REALITY_PORT}, DNS=${TARGET_DNS_PORT}." ;;
+    esac
+}
 
 # ==============================================================================
 # 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
@@ -377,14 +422,13 @@ fi
 
 [ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
 
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    prompt_target_details
+fi
+
 # ==============================================================================
 # 3. РУЧНОЙ HANDOFF ДЛЯ 3X-UI
 # ==============================================================================
-mark_step "3x-ui: guard relay mode"
-if [ "$DEPLOY_MODE" = "relay" ]; then
-    err "Режим relay будет реализован на следующем этапе. На этапе 3 он намеренно остановлен до начала настройки сервисов."
-fi
-
 mark_step "3x-ui: cleanup legacy direct Xray artifacts"
 log "Удаление legacy direct Xray-конфига от предыдущих версий..."
 remove_legacy_xui
@@ -679,14 +723,30 @@ else
 fi
 
 ufw default allow outgoing
-mark_step "Firewall: target allow Reality 443/tcp"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay local allow Reality 443/tcp"
+else
+    mark_step "Firewall: target allow Reality 443/tcp"
+fi
 ufw allow 443/tcp
-mark_step "Firewall: target allow AdGuardHome web"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay local allow AdGuardHome web"
+else
+    mark_step "Firewall: target allow AdGuardHome web"
+fi
 ufw allow ${ADG_PORT}/tcp
-mark_step "Firewall: target allow AWG 53/udp"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay local allow AWG 53/udp"
+else
+    mark_step "Firewall: target allow AWG 53/udp"
+fi
 ufw allow ${AWG_PORT}/udp
 # Разрешаем трафик к AGH DNS порту от VPN-клиентов (DNAT: awg0:53 -> 0.0.0.0:ADG_DNS_PORT)
-mark_step "Firewall: target allow AdGuardHome DNS from awg0"
+if [ "$DEPLOY_MODE" = "relay" ]; then
+    mark_step "Firewall: relay local allow AdGuardHome DNS from awg0"
+else
+    mark_step "Firewall: target allow AdGuardHome DNS from awg0"
+fi
 ufw allow in on awg0 to any port ${ADG_DNS_PORT}
 sed -i 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 ufw --force enable
@@ -769,6 +829,10 @@ AWG_H2=${H2}
 AWG_H3=${H3}
 AWG_H4=${H4}
 AWG_CLIENT_CONF=/root/amnezia_client.conf
+TARGET_IP=${TARGET_IP}
+TARGET_AWG_PORT=${TARGET_AWG_PORT}
+TARGET_REALITY_PORT=${TARGET_REALITY_PORT}
+TARGET_DNS_PORT=${TARGET_DNS_PORT}
 CREDS
 chmod 600 "$CREDS_FILE"
 
@@ -784,11 +848,27 @@ echo -e "Официальный installer 3x-ui уже был запущен и�
 echo -e "Дальнейшая настройка панели, inbound Reality и клиентских ссылок выполняется ${YELLOW}вручную${RESET}."
 echo -e "Если для панели выбран отдельный порт, откройте его в UFW вручную после настройки."
 
-echo -e "\n${GREEN}Target handoff для relay:${RESET}"
-echo -e "IP: ${SERVER_IP}"
-echo -e "AWG: ${SERVER_IP}:53/udp"
-echo -e "Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
-echo -e "DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
+if [ "$DEPLOY_MODE" = "target" ]; then
+    echo -e "\n${GREEN}Target handoff для relay:${RESET}"
+    echo -e "IP: ${SERVER_IP}"
+    echo -e "AWG: ${SERVER_IP}:53/udp"
+    echo -e "Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
+    echo -e "DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
+else
+    echo -e "\n${GREEN}Relay local direct stack:${RESET}"
+    echo -e "IP: ${SERVER_IP}"
+    echo -e "Локальный AWG: ${SERVER_IP}:53/udp"
+    echo -e "Локальный Reality: ${SERVER_IP}:${REALITY_PORT}/tcp"
+    echo -e "Локальный DNS endpoint: ${SERVER_IP}:${ADG_DNS_PORT}"
+
+    echo -e "\n${GREEN}Future relay-forward endpoints:${RESET}"
+    echo -e "На этом этапе forwarding ещё не включён."
+    echo -e "Target для будущего forwarding:"
+    echo -e "Target IP: ${TARGET_IP}"
+    echo -e "Target AWG: ${TARGET_IP}:${TARGET_AWG_PORT}/udp"
+    echo -e "Target Reality: ${TARGET_IP}:${TARGET_REALITY_PORT}/tcp"
+    echo -e "Target DNS: ${TARGET_IP}:${TARGET_DNS_PORT}"
+fi
 
 echo -e "\n${GREEN}AdGuardHome:${RESET}"
 echo -e "Админка (Web UI): ${YELLOW}http://${SERVER_IP}:${ADG_PORT}/${RESET}"

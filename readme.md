@@ -1,8 +1,8 @@
 <!--
 Name: 3x Bundle Guide
-Description: Документация по поэтапному инсталлятору 3x-awg-adg-bundle. На этапе 4 скрипт завершает target-сценарий: поднимает AmneziaWG на 53/udp с MTU 1280, AdGuardHome direct, запускает официальный интерактивный installer 3x-ui и печатает handoff для будущего relay.
+Description: Документация по поэтапному инсталлятору 3x-awg-adg-bundle. На этапе 5 скрипт поддерживает target и relay-local сценарии: target печатает handoff для relay, а relay интерактивно собирает target-параметры, поднимает собственный direct-стек и сохраняет TARGET_* для будущего forwarding.
 Usage: Read before running setup.sh or uninstall.sh.
-Behavior: Explains the current target-only stage, manual 3x-ui handoff, generated outputs, and cleanup path.
+Behavior: Explains the current target and relay-local stage, manual 3x-ui handoff, generated outputs, and cleanup path.
 Returns: Operator reference for the current bundle layout.
 Fails: N/A.
 -->
@@ -10,7 +10,7 @@ Fails: N/A.
 # 3x-awg-adg-bundle
 
 Stage-based installer for a compact VPS stack: **3x-ui**, **AmneziaWG**, and **AdGuardHome**.
-At the current stage, `setup.sh` supports `target` only. `relay` intentionally stops early with a clear error until the next migration stage.
+At the current stage, `setup.sh` supports `target` and a useful `relay` local direct stack. Transparent relay forwarding is planned for the next stage.
 
 [🇷🇺 Перейти к русской версии](#russian) | [🇺🇸 Switch to English version](#english)
 
@@ -23,13 +23,15 @@ At the current stage, `setup.sh` supports `target` only. `relay` intentionally s
 - Запускает официальный интерактивный installer `3x-ui`.
 - Не делает silent install и не конфигурирует `3x-ui` автоматически.
 - Поднимает `AmneziaWG` на `53/udp` с `MTU 1280` и `AdGuardHome` как direct-стек текущего этапа.
+- В режиме `--mode relay` интерактивно запрашивает параметры `target` через `/dev/tty`.
+- Сохраняет `TARGET_IP`, `TARGET_AWG_PORT`, `TARGET_REALITY_PORT`, `TARGET_DNS_PORT` для будущего transparent forwarding.
 - Сохраняет credentials для `AWG` и `AdGuardHome` в `/root/.vpn-credentials`.
 - Оставляет порт `443` зарезервированным под `Reality`, но сам inbound и клиентские ссылки оператор настраивает вручную уже внутри `3x-ui`.
 
-### Ограничения этапа 4
+### Ограничения этапа 5
 
-- Поддерживается только `--mode target`.
-- `--mode relay` специально завершает работу до начала настройки сервисов с понятным fail-fast сообщением.
+- `--mode relay` поднимает только собственный локальный direct-стек: локальные `AWG`, `AdGuardHome` и ручной `3x-ui` flow.
+- Transparent port forwarding с внешних relay-портов на target ещё не включён.
 - `setup.sh` больше не хранит и не генерирует legacy `Xray/cascade` конфиг, `CASCADE_*`, `VLESS_LINK` и `ADG_HTTP_PROXY_PORT`.
 
 ### Что делает `setup.sh`
@@ -40,7 +42,8 @@ At the current stage, `setup.sh` supports `target` only. `relay` intentionally s
 - Устанавливает и настраивает `AdGuardHome` без HTTP proxy-зависимости от `Xray`.
 - Запускает официальный installer `3x-ui` через `/dev/tty`, чтобы оператор прошёл ручной интерактивный flow.
 - После installer-а выводит handoff: дальнейшая настройка панели, `Reality` inbound и клиентских ссылок выполняется вручную вне скрипта.
-- Печатает target-данные для следующего сервера: IP, `AWG 53/udp`, `Reality 443/tcp`, DNS endpoint AdGuardHome.
+- В режиме `target` печатает target-данные для следующего сервера: IP, `AWG 53/udp`, `Reality 443/tcp`, DNS endpoint AdGuardHome.
+- В режиме `relay` печатает отдельные блоки `Relay local direct stack` и `Future relay-forward endpoints`.
 
 Официальная команда installer-а `3x-ui` сверена с первичным источником: [MHSanaei/3x-ui Wiki](https://github.com/MHSanaei/3x-ui/wiki/Installation) и [репозиторием MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui).
 
@@ -48,6 +51,12 @@ At the current stage, `setup.sh` supports `target` only. `relay` intentionally s
 
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
+```
+
+### Установка relay-local стека
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --mode relay
 ```
 
 ### Повторный запуск с ротацией
@@ -85,13 +94,15 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 - Runs the official interactive `3x-ui` installer.
 - Does not perform silent install and does not auto-configure `3x-ui`.
 - Brings up `AmneziaWG` on `53/udp` with `MTU 1280` and `AdGuardHome` as the direct stack for the current stage.
+- In `--mode relay`, prompts for target details through `/dev/tty`.
+- Stores `TARGET_IP`, `TARGET_AWG_PORT`, `TARGET_REALITY_PORT`, and `TARGET_DNS_PORT` for future transparent forwarding.
 - Stores `AWG` and `AdGuardHome` credentials in `/root/.vpn-credentials`.
 - Keeps port `443` reserved for `Reality`, but the inbound and client links are configured manually by the operator inside `3x-ui`.
 
-### Stage-4 limitations
+### Stage-5 limitations
 
-- Only `--mode target` is supported.
-- `--mode relay` intentionally exits before service setup with a clear fail-fast error.
+- `--mode relay` only brings up its own local direct stack: local `AWG`, `AdGuardHome`, and the manual `3x-ui` flow.
+- Transparent port forwarding from external relay ports to the target is not enabled yet.
 - `setup.sh` no longer stores or generates the legacy `Xray/cascade` config, `CASCADE_*`, `VLESS_LINK`, or `ADG_HTTP_PROXY_PORT`.
 
 ### What `setup.sh` does
@@ -102,7 +113,8 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 - Installs and configures `AdGuardHome` without any `Xray` HTTP proxy dependency.
 - Launches the official `3x-ui` installer through `/dev/tty` so the operator completes the interactive flow manually.
 - Prints a handoff after the installer: panel setup, `Reality` inbound creation, and client link generation are handled manually outside the script.
-- Prints target details for the next server: IP, `AWG 53/udp`, `Reality 443/tcp`, and the AdGuardHome DNS endpoint.
+- In `target` mode, prints target details for the next server: IP, `AWG 53/udp`, `Reality 443/tcp`, and the AdGuardHome DNS endpoint.
+- In `relay` mode, prints separate `Relay local direct stack` and `Future relay-forward endpoints` blocks.
 
 The `3x-ui` installer command was verified against the primary sources: [MHSanaei/3x-ui Wiki](https://github.com/MHSanaei/3x-ui/wiki/Installation) and the [MHSanaei/3x-ui repository](https://github.com/MHSanaei/3x-ui).
 
@@ -110,6 +122,12 @@ The `3x-ui` installer command was verified against the primary sources: [MHSanae
 
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash
+```
+
+### Install relay-local stack
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --mode relay
 ```
 
 ### Re-run with rotation

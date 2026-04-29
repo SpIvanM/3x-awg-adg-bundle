@@ -36,7 +36,7 @@ validate_stack() {
     systemctl restart awg-quick@awg0 || err "Не удалось поднять awg0 после настройки."
     systemctl restart "$agh_service_name" || err "Не удалось перезапустить ${agh_service_name}."
 
-    ss -lntup | grep -Eq ':51820 ' || err "AmneziaWG не слушает порт 51820."
+    ss -lunp | grep -Eq ":${AWG_PORT} " || err "AmneziaWG не слушает UDP порт ${AWG_PORT}."
     dig @127.0.0.1 -p "${ADG_DNS_PORT}" example.com +short | grep -q . || err "AdGuardHome не отвечает на локальные DNS-запросы."
     awg show | grep -q '^interface: awg0' || err "AmneziaWG interface awg0 не поднялся."
 }
