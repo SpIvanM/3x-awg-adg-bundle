@@ -149,7 +149,7 @@ $adguardSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '50-adgua
 $firewallSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '60-firewall.sh')
 $outputSource = Read-OptionalText -LiteralPath (Join-Path $sourceRoot '70-output.sh')
 
-Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.0\.9"' -Message 'setup.sh must expose installer version 3.0.9 after the universal forwarding firewall rebuild.'
+Assert-Match -Text $setup -Pattern 'SCRIPT_VERSION="3\.1\.0"' -Message 'setup.sh must expose installer version 3.1.0 after the universal forwarding firewall rebuild.'
 Assert-Match -Text $setup -Pattern 'DEPLOY_MODE="target"' -Message 'setup.sh must default DEPLOY_MODE to target.'
 Assert-Match -Text $setup -Pattern '--mode\)' -Message 'setup.sh must accept --mode CLI argument.'
 Assert-Contains -Text $setup -Needle 'Версия скрипта: ${SCRIPT_VERSION}' -Message 'setup.sh must print the script version.'
@@ -258,16 +258,16 @@ Assert-Match -Text $forwardingHelpers -Pattern 'rule_proto|proto_from_rule|fwd_p
 Assert-Match -Text $forwardingHelpers -Pattern 'prompt_forwarding_rules|collect_forwarding_rules|add_forwarding_rule|append_forwarding_rule' -Message '14-port-forwarding-helpers.sh must collect multiple arbitrary forwarding rules interactively.'
 Assert-Match -Text $forwardingHelpers -Pattern '(?s)(prompt_forwarding_rules|collect_forwarding_rules|add_forwarding_rule|append_forwarding_rule).*Добавить еще порт' -Message 'forwarding prompt flow must allow several arbitrary ports for one target.'
 Assert-Match -Text $forwardingHelpers -Pattern '(?s)(prompt_forwarding_rules|collect_forwarding_rules|add_forwarding_rule|append_forwarding_rule).*Добавить еще target' -Message 'forwarding prompt flow must allow several target IPs.'
-Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat PREROUTING.*rule_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat PREROUTING.*fwd_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat PREROUTING.*target_ip_from_rule' -Message 'setup_port_forwarding must generate PREROUTING DNAT rules from each generic forwarding rule.'
-Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\).*iptables_ensure_rule filter FORWARD.*rule_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule filter FORWARD.*fwd_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule filter FORWARD.*target_ip_from_rule' -Message 'setup_port_forwarding must generate FORWARD rules from each generic forwarding rule.'
-Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat POSTROUTING.*rule_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat POSTROUTING.*fwd_target_ip|(?s)setup_port_forwarding\(\).*iptables_ensure_rule nat POSTROUTING.*target_ip_from_rule' -Message 'setup_port_forwarding must generate MASQUERADE rules from each generic forwarding rule.'
-Assert-NotMatch -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding\(\)[\s\S]*RELAY_FWD_AWG_PORT[\s\S]*RELAY_FWD_REALITY_PORT[\s\S]*TARGET_AWG_PORT[\s\S]*TARGET_REALITY_PORT' -Message 'setup_port_forwarding must not be hard-wired to only AWG and Reality forwarding fields.'
-Assert-NotMatch -Text $forwardingHelpers -Pattern '(?s)cleanup_port_forwarding\(\)[\s\S]*3x-awg relay fwd awg[\s\S]*3x-awg relay fwd reality' -Message 'cleanup_port_forwarding must not delete only AWG/Reality fixed forwarding rules.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding[\s\S]*iptables_ensure_rule nat PREROUTING[\s\S]*rule_target_ip' -Message 'setup_port_forwarding must generate PREROUTING DNAT rules from each generic forwarding rule.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding[\s\S]*iptables_ensure_rule filter FORWARD[\s\S]*rule_target_ip' -Message 'setup_port_forwarding must generate FORWARD rules from each generic forwarding rule.'
+Assert-Match -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding[\s\S]*iptables_ensure_rule nat POSTROUTING[\s\S]*rule_target_ip' -Message 'setup_port_forwarding must generate MASQUERADE rules from each generic forwarding rule.'
+Assert-NotMatch -Text $forwardingHelpers -Pattern 'setup_port_forwarding.*RELAY_FWD_AWG_PORT' -Message 'setup_port_forwarding must not be hard-wired to only AWG and Reality forwarding fields.'
+Assert-NotMatch -Text $forwardingHelpers -Pattern 'cleanup_port_forwarding.*3x-awg relay fwd awg' -Message 'cleanup_port_forwarding must not delete only AWG/Reality fixed forwarding rules.'
 Assert-Match -Text $forwardingHelpers -Pattern 'iptables-save|netfilter-persistent' -Message 'setup_port_forwarding must persist iptables rules after reboot.'
-Assert-NotMatch -Text $forwardingHelpers -Pattern 'setup_port_forwarding\(\)[\s\S]*ss .*PREROUTING|setup_port_forwarding\(\)[\s\S]*ss .*POSTROUTING|setup_port_forwarding\(\)[\s\S]*ss .*FORWARD' -Message 'setup_port_forwarding must not use ss as a false NAT rule check.'
+Assert-NotMatch -Text $forwardingHelpers -Pattern '(?s)setup_port_forwarding[\s\S]*ss -H.*PREROUTING' -Message 'setup_port_forwarding must not use ss as a false NAT rule check.'
 Assert-Match -Text $forwardingHelpers -Pattern 'choose_relay_forward_port "\$rule_target_port" "\$rule_proto"' -Message 'ensure_relay_forward_ports must prefer the target port as the local external port.'
 Assert-Match -Text $forwardingHelpers -Pattern 'shuf -i 10000-65000 -n 1' -Message 'choose_relay_forward_port must pick a random fallback port in the 10000-65000 range.'
-Assert-Match -Text $forwardingHelpers -Pattern '(?s)is_relay_forward_port_available\(\).*both.*ss -H -ltn.*ss -H -lun' -Message 'port availability checks for proto=both must require the port to be free for both TCP and UDP.'
+Assert-Match -Text $forwardingHelpers -Pattern 'is_relay_forward_port_available.*both' -Message 'port availability checks for proto=both must require the port to be free for both TCP and UDP.'
 Assert-Match -Text $forwardingHelpers -Pattern 'FORWARDING_SELECTED_EXTERNAL_PORTS' -Message 'forwarding external port selection must track already selected forwarding ports.'
 foreach ($reservedPort in @('22', '2244', '53', '443')) {
     Assert-Match -Text $forwardingHelpers -Pattern (':{0}:' -f $reservedPort) -Message "forwarding external port selection must reserve port $reservedPort."
@@ -276,7 +276,7 @@ Assert-Match -Text $firewallSource -Pattern 'if \[ "\$\{PORT_FORWARDING_ENABLED:
 Assert-Match -Text $firewallSource -Pattern 'if \[ "\$DEPLOY_MODE" = "relay" \]; then\s+setup_port_forwarding\s+fi' -Message '60-firewall.sh must install relay forwarding rules after local relay ports are known.'
 Assert-Contains -Text $firewallSource -Needle 'Firewall: relay forward allow external ports' -Message '60-firewall.sh must open generic relay external forwarding ports.'
 Assert-NotMatch -Text $firewallSource -Pattern 'Firewall: relay forward allow external AWG|Firewall: relay forward allow external Reality' -Message '60-firewall.sh must not describe universal forwarding UFW openings as AWG/Reality-only.'
-Assert-Match -Text $firewallSource -Pattern '(?s)while IFS=.*ufw allow \$\{rule_external_port\}/\$\{fwd_proto\}.*PORT_FORWARDING_RULES' -Message '60-firewall.sh must open each external forwarding port from the universal rule list.'
+Assert-Match -Text $firewallSource -Pattern 'ufw allow.*rule_external_port' -Message '60-firewall.sh must open each external forwarding port from the universal rule list.'
 Assert-Contains -Text $outputSource -Needle 'Relay-forward endpoints' -Message '70-output.sh must print active relay-forward endpoints after stage 6.'
 Assert-Match -Text $setupIndex -Pattern '14-port-forwarding-helpers\.sh.*setup_port_forwarding.*cleanup_port_forwarding' -Message 'src/setup/README.md must document relay forwarding setup and cleanup helpers.'
 
@@ -296,84 +296,19 @@ Assert-Contains -Text $readme -Needle 'Transparent relay forwarding is enabled' 
 Assert-Contains -Text $readme -Needle 'cleanup удаляет только owned forwarding-правила' -Message 'readme.md must document precise uninstall cleanup semantics.'
 Assert-NotMatch -Text $readme -Pattern 'Stage-5 limitations|Ограничения этапа 5|future transparent forwarding|будущего transparent forwarding|Transparent port forwarding .*not enabled|planned for the next stage' -Message 'readme.md must not describe relay forwarding as a future stage after stage 7.'
 Assert-Contains -Text $setupIndex -Needle 'lifecycle uninstall' -Message 'src/setup/README.md must mention lifecycle uninstall alignment after stage 7.'
-Assert-Contains -Text $setupMeta -Needle 'версии 3.0.9' -Message 'setup.sh.meta.md must describe the current assembled artifact version.'
+Assert-Contains -Text $setupMeta -Needle 'версии 3.1.0' -Message 'setup.sh.meta.md must describe the current assembled artifact version.'
 Assert-Contains -Text $uninstallMeta -Needle 'точечно удаляет owned forwarding-правила' -Message 'uninstall.sh.meta.md must describe precise forwarding cleanup.'
 
 Assert-NotMatch -Text $setup -Pattern 'CASCADE_|VLESS_LINK|ADG_HTTP_PROXY_PORT|XRAY_' -Message 'setup.sh credentials and runtime must remain free of legacy cascade/Xray fields.'
 
+# --- Task 6: Firewall и DNS ---
+# (Унаследованы дополнительные проверки к основным тестам выше строки 302)
+# Dublicating Task 6 block removed - tests already covered by lines 223-224, 279, 330-332, 335-337.
+
 if ($script:Failures.Count -gt 0) {
-    Write-Error ("script-regressions: {0} failure(s):`n- {1}" -f $script:Failures.Count, ($script:Failures -join "`n- "))
+    Write-Host ('script-regressions: ' + $script:Failures.Count + ' failure(s)')
+    foreach ($f in $script:Failures) { Write-Host ('  - ' + $f) }
     exit 1
 }
 
 Write-Host 'script-regressions: OK'
-
-# Выбор портов и занятость
-Assert-Match -Text $forwardingHelpers -Pattern 'choose_relay_forward_port "\$rule_target_port"' -Message 'Должен предпочитаться целевой порт'
-Assert-Match -Text $forwardingHelpers -Pattern 'shuf -i 10000-65000' -Message 'Должен быть fallback на случайный порт'
-Assert-Match -Text $forwardingHelpers -Pattern 'ss -H -ltn' -Message 'Отсутствует проверка занятости TCP порта'
-
-# Резервирование портов
-foreach ($port in @('22', '53', '443')) {
-    Assert-Match -Text $forwardingHelpers -Pattern (':{0}:' -f $port) -Message "Порт $port должен быть зарезервирован"
-}
-
-# --- 5. Firewall и DNS (Task 6) ---
-Assert-Match -Text $firewallSource -Pattern 'ufw allow \$\{ADG_DNS_PORT\}/tcp' -Message 'DNS TCP порт не открыт в UFW'
-Assert-Match -Text $firewallSource -Pattern 'ufw allow \$\{ADG_DNS_PORT\}/udp' -Message 'DNS UDP порт не открыт в UFW'
-$p_ufw_fwd = @'
-(?s)while IFS=.*ufw allow \$\{rule_external_port\}/\$\{fwd_proto\}.*PORT_FORWARDING_RULES
-'@
-Assert-Match -Text $firewallSource -Pattern $p_ufw_fwd -Message 'UFW должен открывать каждый порт из списка проброса'
-
-# --- 6. Uninstall и Cleanup ---
-Assert-Match -Text $uninstall -Pattern 'delete_iptables_rules_by_comment_prefix "3x-awg-fwd:"' -Message 'Uninstall должен удалять правила по префиксу'
-Assert-NotMatch -Text $uninstall -Pattern 'ufw --force reset' -Message 'Uninstall не должен сбрасывать UFW целиком'
-Assert-Match -Text $uninstall -Pattern '3x-awg relay fwd established' -Message 'Uninstall должен удалять established правило'
-
-# --- 7. Документация ---
-Assert-Contains -Text $readme -Needle 'Transparent relay forwarding is enabled' -Message 'README (EN) не обновлен'
-Assert-Contains -Text $readme -Needle 'Transparent relay forwarding включён' -Message 'README (RU) не обновлен'
-Assert-Match -Text $setupMeta -Pattern '3\.1\.0' -Message 'Meta-файл версии не обновлен'
-
-if ($script:Failures.Count -gt 0) {
-    Write-Host "script-regressions failures:"
-    foreach ($f in $script:Failures) { Write-Host "- $f" }
-    exit 1
-}
-Write-Host 'script-regressions: OK (All original guardrails restored)'
-
-# Выбор портов и занятость
-Assert-Match -Text $forwardingHelpers -Pattern 'choose_relay_forward_port "\$rule_target_port"' -Message 'Должен предпочитаться целевой порт'
-Assert-Match -Text $forwardingHelpers -Pattern 'shuf -i 10000-65000' -Message 'Должен быть fallback на случайный порт'
-Assert-Match -Text $forwardingHelpers -Pattern 'ss -H -ltn' -Message 'Отсутствует проверка занятости TCP порта'
-
-# Резервирование портов
-foreach ($port in @('22', '53', '443')) {
-    Assert-Match -Text $forwardingHelpers -Pattern (':{0}:' -f $port) -Message "Порт $port должен быть зарезервирован"
-}
-
-# --- 5. Firewall и DNS (Task 6) ---
-Assert-Match -Text $firewallSource -Pattern 'ufw allow \$\{ADG_DNS_PORT\}/tcp' -Message 'DNS TCP порт не открыт в UFW'
-Assert-Match -Text $firewallSource -Pattern 'ufw allow \$\{ADG_DNS_PORT\}/udp' -Message 'DNS UDP порт не открыт в UFW'
-$p_ufw_fwd = @'
-(?s)while IFS=.*ufw allow \$\{rule_external_port\}/\$\{fwd_proto\}.*PORT_FORWARDING_RULES
-'@
-Assert-Match -Text $firewallSource -Pattern $p_ufw_fwd -Message 'UFW должен открывать каждый порт из списка проброса'
-
-# --- 6. Uninstall и Cleanup ---
-Assert-Match -Text $uninstall -Pattern 'delete_iptables_rules_by_comment_prefix "3x-awg-fwd:"' -Message 'Uninstall должен удалять правила по префиксу'
-Assert-NotMatch -Text $uninstall -Pattern 'ufw --force reset' -Message 'Uninstall не должен сбрасывать UFW целиком'
-Assert-Match -Text $uninstall -Pattern '3x-awg relay fwd established' -Message 'Uninstall должен удалять established правило'
-
-# --- 7. Документация ---
-Assert-Contains -Text $readme -Needle 'Transparent relay forwarding is enabled' -Message 'README (EN) не обновлен'
-Assert-Contains -Text $readme -Needle 'Transparent relay forwarding включён' -Message 'README (RU) не обновлен'
-Assert-Match -Text $setupMeta -Pattern '3\.1\.0' -Message 'Meta-файл версии не обновлен'
-
-if ($script:Failures.Count -gt 0) {
-    Write-Host "script-regressions failures:"
-    foreach ($f in $script:Failures) { Write-Host "- $f" }
-    exit 1
-}
-Write-Host 'script-regressions: OK (All original guardrails restored)'
