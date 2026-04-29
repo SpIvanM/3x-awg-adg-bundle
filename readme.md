@@ -1,8 +1,8 @@
 <!--
 Name: 3x Bundle Guide
-Description: Документация по инсталлятору 3x-awg-adg-bundle. Версия 3.0.6 поддерживает target, relay-local direct stack, transparent relay forwarding и точечный lifecycle cleanup.
+Description: Документация по инсталлятору 3x-awg-adg-bundle. Версия 3.1.2 поддерживает target, relay-local direct stack, универсальный проброс портов и визуальную схему топологии.
 Usage: Read before running setup.sh or uninstall.sh.
-Behavior: Explains target, relay-local stack, transparent relay forwarding, manual 3x-ui handoff, generated outputs, and cleanup path.
+Behavior: Explains target, relay-local stack, transparent relay forwarding, manual 3x-ui handoff, generated outputs, and topology visualization.
 Returns: Operator reference for the current bundle layout.
 Fails: N/A.
 -->
@@ -28,6 +28,78 @@ Version `3.1.2` supports a unified local direct stack on every server, optional 
 - Сохраняет правила проброса (target IP, порты, протоколы) в `/root/.vpn-forwarding-rules`.
 - Сохраняет credentials для `AWG` и `AdGuardHome` в `/root/.vpn-credentials`.
 - Оставляет порт `443` зарезервированным под `Reality`, но сам inbound и клиентские ссылки оператор настраивает вручную уже внутри `3x-ui`.
+
+### Топология
+
+```mermaid
+graph TD
+    subgraph Clients ["Устройства Пользователей"]
+        subgraph CDir ["Direct Global Connection"]
+            U_Dir_AWG["AWG Client"]
+            U_Dir_XR["XRay Client"]
+            U_Dir_DNS["DNS Client"]
+        end
+  
+        subgraph CRel ["Подкл. через Relay"]
+            U_Rel_FWD["Forwarded Service Clients"]
+            U_Rel_LAWG["Local AWG Client"]
+            U_Rel_LXR["Local 3x Client"]
+            U_Rel_LDNS["Local DNS Client"]
+        end
+    end
+
+    subgraph RelayVPS ["VPS 1: с IP из белых списков до DPI "]
+        subgraph PF ["Optional Interactive Port Forwarding (L4)"]
+            PF_ANY["Forward selected TCP/UDP ports"]
+        end
+  
+        subgraph RLoc ["Локальный Стек (Direct)"]
+            RAWG["AmneziaWG"]
+            RXR["3x-ui"]
+            RAGH["AdGuardHome"]
+        end
+    end
+    NetRu(("Интернет РФ"))
+    subgraph Global ["Глобальный интернет"]
+        subgraph TargetVPS ["VPS 2: after DPI"]
+            TAWG["AmneziaWG"]
+            TXR["3x-ui"]
+            TAGH["AdGuardHome"]
+            TANY["Any selected TCP/UDP service"]
+        end
+    Net(("Интернет"))
+    end
+
+
+    %% Connections to Target (Direct)
+    U_Dir_AWG -->|"UDP 53 (DPI)"| TAWG
+    U_Dir_XR -->|"TCP 443 (DPI, manual 3x-ui)"| TXR
+    U_Dir_DNS -->|"DNS (Random) (DPI)"| TAGH
+  
+    TAWG -->|"Direct"| Net
+    TXR -->|"Direct"| Net
+    TAGH -->|"Direct"| Net
+
+    %% Connections to Relay
+    U_Rel_FWD -->|"TCP/UDP chosen external ports"| PF_ANY
+    U_Rel_LAWG -->|"UDP 53"| RAWG
+    U_Rel_LXR -->|"TCP 443 (manual 3x-ui)"| RXR
+    U_Rel_LDNS -->|"DNS (Random)"| RAGH
+
+    PF_ANY -->|"UDP 53 example"| TAWG
+    PF_ANY -->|"TCP 443 example"| TXR
+    PF_ANY -->|"DNS random / selected port"| TAGH
+    PF_ANY -->|"Any selected TCP/UDP port"| TANY
+  
+    RAWG -->|"Direct (DPI)"| Net
+    RXR -->|"Direct (DPI)"| Net
+    RAGH -->|"Direct (DPI)"| Net
+
+    RAWG -->|"Direct"| NetRu
+    RXR -->|"Direct"| NetRu
+    RAGH -->|"Direct"| NetRu
+```
+
 
 ### Ограничения
 
@@ -102,6 +174,78 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 - Stores forwarding rules in `/root/.vpn-forwarding-rules`.
 - Stores `AWG` and `AdGuardHome` credentials in `/root/.vpn-credentials`.
 - Keeps port `443` reserved for `Reality`, but the inbound and client links are configured manually by the operator inside `3x-ui`.
+
+### Topology
+
+```mermaid
+graph TD
+    subgraph Clients ["Устройства Пользователей"]
+        subgraph CDir ["Direct Global Connection"]
+            U_Dir_AWG["AWG Client"]
+            U_Dir_XR["XRay Client"]
+            U_Dir_DNS["DNS Client"]
+        end
+  
+        subgraph CRel ["Подкл. через Relay"]
+            U_Rel_FWD["Forwarded Service Clients"]
+            U_Rel_LAWG["Local AWG Client"]
+            U_Rel_LXR["Local 3x Client"]
+            U_Rel_LDNS["Local DNS Client"]
+        end
+    end
+
+    subgraph RelayVPS ["VPS 1: с IP из белых списков до DPI "]
+        subgraph PF ["Optional Interactive Port Forwarding (L4)"]
+            PF_ANY["Forward selected TCP/UDP ports"]
+        end
+  
+        subgraph RLoc ["Локальный Стек (Direct)"]
+            RAWG["AmneziaWG"]
+            RXR["3x-ui"]
+            RAGH["AdGuardHome"]
+        end
+    end
+    NetRu(("Интернет РФ"))
+    subgraph Global ["Глобальный интернет"]
+        subgraph TargetVPS ["VPS 2: after DPI"]
+            TAWG["AmneziaWG"]
+            TXR["3x-ui"]
+            TAGH["AdGuardHome"]
+            TANY["Any selected TCP/UDP service"]
+        end
+    Net(("Интернет"))
+    end
+
+
+    %% Connections to Target (Direct)
+    U_Dir_AWG -->|"UDP 53 (DPI)"| TAWG
+    U_Dir_XR -->|"TCP 443 (DPI, manual 3x-ui)"| TXR
+    U_Dir_DNS -->|"DNS (Random) (DPI)"| TAGH
+  
+    TAWG -->|"Direct"| Net
+    TXR -->|"Direct"| Net
+    TAGH -->|"Direct"| Net
+
+    %% Connections to Relay
+    U_Rel_FWD -->|"TCP/UDP chosen external ports"| PF_ANY
+    U_Rel_LAWG -->|"UDP 53"| RAWG
+    U_Rel_LXR -->|"TCP 443 (manual 3x-ui)"| RXR
+    U_Rel_LDNS -->|"DNS (Random)"| RAGH
+
+    PF_ANY -->|"UDP 53 example"| TAWG
+    PF_ANY -->|"TCP 443 example"| TXR
+    PF_ANY -->|"DNS random / selected port"| TAGH
+    PF_ANY -->|"Any selected TCP/UDP port"| TANY
+  
+    RAWG -->|"Direct (DPI)"| Net
+    RXR -->|"Direct (DPI)"| Net
+    RAGH -->|"Direct (DPI)"| Net
+
+    RAWG -->|"Direct"| NetRu
+    RXR -->|"Direct"| NetRu
+    RAGH -->|"Direct"| NetRu
+```
+
 
 ### Limitations
 
