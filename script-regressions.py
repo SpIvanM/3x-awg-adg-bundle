@@ -120,8 +120,8 @@ output_source       = read_text(os.path.join(SOURCE_ROOT, "70-output.sh"))
 # Stage 1: bootstrap baseline
 # ---------------------------------------------------------------------------
 
-assert_match(setup, r'SCRIPT_VERSION="3\.2\.0"',
-    "setup.sh must expose installer version 3.2.0 after the universal forwarding firewall rebuild.")
+assert_match(setup, r'SCRIPT_VERSION="3\.2\.2"',
+    "setup.sh must expose installer version 3.2.2 after the universal forwarding firewall rebuild.")
 assert_match(setup, r'DEPLOY_MODE="target"',
     "setup.sh must default DEPLOY_MODE to target.")
 assert_match(setup, r'--mode\)',
@@ -449,7 +449,8 @@ assert_not_match(readme,
     "readme.md must not describe relay forwarding as a future stage after stage 7.")
 assert_contains(setup_index, "lifecycle uninstall",
     "src/setup/README.md must mention lifecycle uninstall alignment after stage 7.")
-assert_contains(setup_meta, "версии 3.1.2",
+# check for version 3.2.2 in meta
+assert_contains(setup_meta, "версии 3.2.2",
     "setup.sh.meta.md must describe the current assembled artifact version.")
 assert_contains(uninstall_meta, "точечно удаляет owned forwarding-правила",
     "uninstall.sh.meta.md must describe precise forwarding cleanup.")

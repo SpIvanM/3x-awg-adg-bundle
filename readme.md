@@ -1,6 +1,6 @@
 <!--
 Name: 3x Bundle Guide
-Description: Документация по инсталлятору 3x-awg-adg-bundle. Версия 3.2.1 поддерживает target, relay-local direct stack, универсальный проброс портов и визуальную схему топологии. Исправлены ошибки в fwd.sh.
+Description: Документация по инсталлятору 3x-awg-adg-bundle. Версия 3.2.2 поддерживает target, relay-local direct stack, универсальный проброс портов и визуальную схему топологии. Исправлены ошибки в fwd.sh.
 Usage: Read before running setup.sh or uninstall.sh.
 Behavior: Explains target, relay-local stack, transparent relay forwarding, manual 3x-ui handoff, generated outputs, and topology visualization.
 Returns: Operator reference for the current bundle layout.
@@ -10,7 +10,7 @@ Fails: N/A.
 # 3x-awg-adg-bundle
 
 Stage-based installer for a compact VPS stack: **3x-ui**, **AmneziaWG**, and **AdGuardHome**.
-Version `3.2.1` supports a unified local direct stack on every server, optional universal interactive port forwarding, and targeted lifecycle cleanup.
+Version `3.2.2` supports a unified local direct stack on every server, optional universal interactive port forwarding, and targeted lifecycle cleanup.
 
 [🇷🇺 Перейти к русской версии](#russian) | [🇺🇸 Switch to English version](#english)
 
@@ -24,7 +24,7 @@ Version `3.2.1` supports a unified local direct stack on every server, optional 
 - Не делает silent install и не конфигурирует `3x-ui` автоматически.
 - Поднимает `AmneziaWG` на `53/udp` с `MTU 1280` и `AdGuardHome` как direct-стек текущего этапа (публичный DNS endpoint открыт в firewall).
 - В режиме `--mode relay` интерактивно запрашивает настройку проброса портов через `/dev/tty`.
-- **Проброс опционален и универсален:** можно пробрасывать любые TCP/UDP порты на несколько target-серверов. Скрипт сам подберет внешние порты и настроит DNAT/FORWARD/MASQUERADE. Не ограничен портами AWG и Reality.
+- **Проброс опционален и универсален:** можно пробрасывать любые TCP/UDP порты на несколько target-серверов. Скрипт сам подберет внешние порты и настроит DNAT/FORWARD/MASQUERADE. Не ограничен портами AWG и Reality. **Transparent relay forwarding включён.**
 - Сохраняет правила проброса (target IP, порты, протоколы) в `/root/.vpn-forwarding-rules`.
 - Сохраняет credentials для `AWG` и `AdGuardHome` в `/root/.vpn-credentials`.
 - Оставляет порт `443` зарезервированным под `Reality`, но сам inbound и клиентские ссылки оператор настраивает вручную уже внутри `3x-ui`.
@@ -191,7 +191,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 - Does not perform silent install and does not auto-configure `3x-ui`.
 - Brings up `AmneziaWG` on `53/udp` with `MTU 1280` and `AdGuardHome` as the direct stack for the current stage (public DNS endpoint is open in the firewall).
 - In `--mode relay`, prompts for optional interactive port forwarding through `/dev/tty`.
-- **Forwarding is universal:** you can forward any TCP/UDP ports to multiple target servers. The script auto-assigns external ports and configures DNAT/FORWARD/MASQUERADE. It is not limited to AWG and Reality.
+- **Forwarding is universal:** you can forward any TCP/UDP ports to multiple target servers. The script auto-assigns external ports and configures DNAT/FORWARD/MASQUERADE. It is not limited to AWG and Reality. **Transparent relay forwarding is enabled.**
 - Stores forwarding rules in `/root/.vpn-forwarding-rules`.
 - Stores `AWG` and `AdGuardHome` credentials in `/root/.vpn-credentials`.
 - Keeps port `443` reserved for `Reality`, but the inbound and client links are configured manually by the operator inside `3x-ui`.
