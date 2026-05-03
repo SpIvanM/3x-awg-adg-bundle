@@ -1,6 +1,6 @@
 <!--
 Name: 3x Bundle Guide
-Description: Документация по инсталлятору 3x-awg-adg-bundle. Версия 3.1.2 поддерживает target, relay-local direct stack, универсальный проброс портов и визуальную схему топологии.
+Description: Документация по инсталлятору 3x-awg-adg-bundle. Версия 3.2.1 поддерживает target, relay-local direct stack, универсальный проброс портов и визуальную схему топологии. Исправлены ошибки в fwd.sh.
 Usage: Read before running setup.sh or uninstall.sh.
 Behavior: Explains target, relay-local stack, transparent relay forwarding, manual 3x-ui handoff, generated outputs, and topology visualization.
 Returns: Operator reference for the current bundle layout.
@@ -10,7 +10,7 @@ Fails: N/A.
 # 3x-awg-adg-bundle
 
 Stage-based installer for a compact VPS stack: **3x-ui**, **AmneziaWG**, and **AdGuardHome**.
-Version `3.1.2` supports a unified local direct stack on every server, optional universal interactive port forwarding, and targeted lifecycle cleanup.
+Version `3.2.1` supports a unified local direct stack on every server, optional universal interactive port forwarding, and targeted lifecycle cleanup.
 
 [🇷🇺 Перейти к русской версии](#russian) | [🇺🇸 Switch to English version](#english)
 

@@ -27,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 export RANDFILE=/tmp/.rnd
 
 # Глобальные переменные и пути
-SCRIPT_VERSION="3.1.2"
+SCRIPT_VERSION="3.2.1"
 CREDS_FILE="/root/.vpn-credentials"
 FORWARDING_STATE_FILE="/root/.vpn-forwarding-rules"
 LOG_FILE="/var/log/vpn-setup.log"

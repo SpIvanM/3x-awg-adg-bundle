@@ -18,7 +18,7 @@ else
 fi
 
 # 2. Ask: Delete old redirects?
-read -p "Delete old redirects? (y/N): " ans
+read -p "Delete old redirects? (y/N): " ans < /dev/tty
 if [[ "$ans" =~ ^[yYдД] ]]; then
     for t in nat filter; do
         iptables-save -t $t | grep "3x-awg-fwd" | sed 's/-A/-D/' > /tmp/fwd_del
@@ -30,15 +30,15 @@ fi
 
 # 3 & 4. Configure new server / port
 while true; do
-    read -p "Configure new server? (Y/n): " ans
+    read -p "Configure new server? (Y/n): " ans < /dev/tty
     [[ "$ans" =~ ^[nNнН] ]] && break
-    read -p " Target IP: " tip
+    read -p " Target IP: " tip < /dev/tty
     [ -z "$tip" ] && continue
     while true; do
-        read -p " Configure new port? (Y/n): " ans
+        read -p " Configure new port? (Y/n): " ans < /dev/tty
         [[ "$ans" =~ ^[nNнН] ]] && break
-        read -p "  Target Port: " tport
-        read -p "  Protocol (tcp/udp/both) [both]: " proto
+        read -p "  Target Port: " tport < /dev/tty
+        read -p "  Protocol (tcp/udp/both) [both]: " proto < /dev/tty
         proto=${proto:-both}
         ext=$tport
         if ss -tlnu | grep -q ":$ext "; then
