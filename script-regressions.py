@@ -120,8 +120,8 @@ output_source       = read_text(os.path.join(SOURCE_ROOT, "70-output.sh"))
 # Stage 1: bootstrap baseline
 # ---------------------------------------------------------------------------
 
-assert_match(setup, r'SCRIPT_VERSION="3\.1\.2"',
-    "setup.sh must expose installer version 3.1.2 after the universal forwarding firewall rebuild.")
+assert_match(setup, r'SCRIPT_VERSION="3\.2\.0"',
+    "setup.sh must expose installer version 3.2.0 after the universal forwarding firewall rebuild.")
 assert_match(setup, r'DEPLOY_MODE="target"',
     "setup.sh must default DEPLOY_MODE to target.")
 assert_match(setup, r'--mode\)',
