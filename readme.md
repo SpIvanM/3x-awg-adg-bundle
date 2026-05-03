@@ -138,19 +138,25 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
-### Управление пробросом портов
+### Управление пробросом портов (fwd.sh)
 
-Если вам нужно изменить правила проброса портов без переустановки всего стека, используйте инструмент `fwd.sh`:
+Если вам нужно изменить правила проброса портов без переустановки всего стека, используйте инструмент `fwd.sh`.
 
+**Возможности:**
+- Просмотр текущих правил в формате `Protocol: IP:Port -> ExternalPort`.
+- Очистка старых правил `iptables` и файла состояния.
+- Интерактивное добавление новых серверов и портов.
+- Автоматический поиск свободного внешнего порта при конфликтах.
+
+**Запуск:**
 ```bash
-# Если скрипт уже скачан локально:
-sudo bash tools/fwd.sh
-
-# Или напрямую из репозитория:
+# Напрямую из репозитория:
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/tools/fwd.sh | sudo bash
+
+# Или локально (если репозиторий клонирован):
+sudo bash tools/fwd.sh
 ```
 
-Этот скрипт позволяет просматривать текущие правила, удалять их и интерактивно добавлять новые.
 
 
 ### Что настроить вручную после installer-а `3x-ui`
@@ -299,19 +305,25 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
-### Port Forwarding Management
+### Port Forwarding Management (fwd.sh)
 
-If you need to modify port forwarding rules without reinstalling the entire stack, use the `fwd.sh` tool:
+If you need to modify port forwarding rules without reinstalling the entire stack, use the `fwd.sh` tool.
 
+**Features:**
+- View current rules in `Protocol: IP:Port -> ExternalPort` format.
+- Clean up old `iptables` rules and state file.
+- Interactively add new target servers and ports.
+- Automatic free external port selection in case of conflicts.
+
+**Usage:**
 ```bash
-# If the script is already local:
-sudo bash tools/fwd.sh
-
-# Or directly from the repository:
+# Directly from the repository:
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/tools/fwd.sh | sudo bash
+
+# Or locally (if repository is cloned):
+sudo bash tools/fwd.sh
 ```
 
-This script allows you to view current rules, delete them, and interactively add new ones.
 
 
 ### Manual steps after the `3x-ui` installer

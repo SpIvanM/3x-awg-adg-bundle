@@ -5,5 +5,5 @@
 *.txt
 .gemini/
 .sandbox/
-.tmp/
 .test-local/
+.tmp/
