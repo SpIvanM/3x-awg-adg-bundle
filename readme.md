@@ -147,7 +147,12 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-vps.sh | sudo bash
 ```
-*(Остальные независимые модули `setup-3x.sh`, `setup-awg.sh`, `setup-agh.sh` находятся в разработке)*
+
+**Запуск настройки 3x (Официальный installer 3x-ui):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-3x.sh | sudo bash
+```
+*(Остальные независимые модули `setup-awg.sh`, `setup-agh.sh` находятся в разработке)*
 
 ### Управление пробросом портов (fwd.sh)
 
@@ -347,7 +352,12 @@ This is useful for debugging or configuring just a single service.
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-vps.sh | sudo bash
 ```
-*(Other standalone modules `setup-3x.sh`, `setup-awg.sh`, `setup-agh.sh` are currently under development)*
+
+**Run 3x Setup (Official 3x-ui interactive installer):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-3x.sh | sudo bash
+```
+*(Other standalone modules `setup-awg.sh`, `setup-agh.sh` are currently under development)*
 
 ### Port Forwarding Management (fwd.sh)
 

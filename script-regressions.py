@@ -472,6 +472,15 @@ if os.path.exists(setup_vps_path):
     assert_match(setup_vps_text, r"LAST_RUN_FILE=\$\{LAST_RUN_FILE:-", "setup-vps.sh must set default global variables.")
     assert_match(setup_vps_text, r"ensure_swapfile", "setup-vps.sh must include or call ensure_swapfile.")
 
+setup_3x_path = os.path.join(SOURCE_ROOT, "setup-3x.sh")
+assert_path_exists(setup_3x_path, "src/setup/setup-3x.sh must be created as a standalone script.")
+
+if os.path.exists(setup_3x_path):
+    setup_3x_text = read_text(setup_3x_path)
+    assert_match(setup_3x_text, r"^#!/bin/bash", "setup-3x.sh must include a bash shebang.")
+    assert_match(setup_3x_text, r"install_3x_ui_interactive", "setup-3x.sh must contain or call install_3x_ui_interactive.")
+    assert_match(setup_3x_text, r"remove_legacy_xui", "setup-3x.sh must contain or call remove_legacy_xui.")
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
