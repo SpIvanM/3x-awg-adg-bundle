@@ -490,6 +490,15 @@ if os.path.exists(setup_awg_path):
     assert_match(setup_awg_text, r"ensure_awg_build_dependencies", "setup-awg.sh must contain or call ensure_awg_build_dependencies.")
     assert_match(setup_awg_text, r"resolve_awg_key_bin", "setup-awg.sh must contain or call resolve_awg_key_bin.")
 
+setup_agh_path = os.path.join(SOURCE_ROOT, "setup-agh.sh")
+assert_path_exists(setup_agh_path, "src/setup/setup-agh.sh must be created as a standalone script.")
+
+if os.path.exists(setup_agh_path):
+    setup_agh_text = read_text(setup_agh_path)
+    assert_match(setup_agh_text, r"^#!/bin/bash", "setup-agh.sh must include a bash shebang.")
+    assert_match(setup_agh_text, r"install_adguardhome", "setup-agh.sh must contain or call install_adguardhome.")
+    assert_match(setup_agh_text, r"configure_adguardhome", "setup-agh.sh must contain or call configure_adguardhome.")
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------

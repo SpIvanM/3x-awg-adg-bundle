@@ -157,7 +157,12 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-awg.sh | sudo bash
 ```
-*(Остальные независимые модули `setup-agh.sh` находятся в разработке)*
+
+**Запуск настройки AdGuardHome (Установка, фильтры, защита от рекламы):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-agh.sh | sudo bash
+```
+*(Модуль оркестратора и генерации конфигов находится в разработке)*
 
 ### Управление пробросом портов (fwd.sh)
 
@@ -367,7 +372,12 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-awg.sh | sudo bash
 ```
-*(Other standalone modules `setup-agh.sh` are currently under development)*
+
+**Run AdGuardHome Setup (Install, filters, ad-blocking):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-agh.sh | sudo bash
+```
+*(The orchestrator and config generation module is currently under development)*
 
 ### Port Forwarding Management (fwd.sh)
 

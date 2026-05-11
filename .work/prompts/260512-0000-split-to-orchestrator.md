@@ -39,7 +39,7 @@
      Контекст: `src/setup/40-awg.sh`, `src/setup/11-awg-helpers.sh`
      Формат: Новый bash-скрипт.
      Ограничения: Не удалять и не изменять существующие скрипты!
-   - [ ] З5: Подготовить скрипт настройки AdguardHome
+   - [X] З5: Подготовить скрипт настройки AdguardHome
      КП1: Создан новый скрипт (например, `setup-agh.sh`), настраивающий AdguardHome.
      Контекст: `src/setup/50-adguard.sh`, `src/setup/12-agh-helpers.sh`
      Формат: Новый bash-скрипт.
