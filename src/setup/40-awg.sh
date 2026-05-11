@@ -3,8 +3,8 @@
 # ==============================================================================
 log "Проверка AmneziaWG..."
 mark_step "AmneziaWG: check installation state"
-if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
-    warn "AmneziaWG уже настроен, пропускаем переустановку."
+if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ] && (lsmod | grep -q amneziawg || modprobe amneziawg 2>/dev/null); then
+    warn "AmneziaWG уже настроен и модуль загружен, пропускаем переустановку."
 else
     mark_step "AmneziaWG: install build dependencies"
     ensure_awg_build_dependencies

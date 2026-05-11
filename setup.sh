@@ -725,8 +725,9 @@ sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || t
 # ==============================================================================
 mark_step "System: prepare runtime context"
 log "Подготовка общих сетевых параметров..."
-SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
-PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+export SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
+export PUB_INT=$(ip route get 8.8.8.8 2>/dev/null | grep -Po '(?<=dev )(\S+)' | head -n1 || echo "eth0")
+[ -z "$PUB_INT" ] && export PUB_INT="eth0"
 
 if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
     log "Загрузка существующего DNS порта AdGuardHome из $CREDS_FILE..."
@@ -754,8 +755,8 @@ install_3x_ui_interactive
 # ==============================================================================
 log "Проверка AmneziaWG..."
 mark_step "AmneziaWG: check installation state"
-if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
-    warn "AmneziaWG уже настроен, пропускаем переустановку."
+if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ] && (lsmod | grep -q amneziawg || modprobe amneziawg 2>/dev/null); then
+    warn "AmneziaWG уже настроен и модуль загружен, пропускаем переустановку."
 else
     mark_step "AmneziaWG: install build dependencies"
     ensure_awg_build_dependencies

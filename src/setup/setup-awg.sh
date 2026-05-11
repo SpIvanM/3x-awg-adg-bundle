@@ -11,7 +11,8 @@ CREDS_FILE=${CREDS_FILE:-"/root/.vpn-credentials"}
 DEPLOY_MODE=${DEPLOY_MODE:-"target"}
 ROTATE_CREDS=${ROTATE_CREDS:-0}
 SERVER_IP=${SERVER_IP:-$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)}
-PUB_INT=${PUB_INT:-$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)}
+PUB_INT=${PUB_INT:-$(ip route get 8.8.8.8 2>/dev/null | grep -Po '(?<=dev )(\S+)' | head -n1 || echo "eth0")}
+[ -z "$PUB_INT" ] && PUB_INT="eth0"
 ADG_DNS_PORT=${ADG_DNS_PORT:-$(shuf -i 10000-65000 -n 1)}
 
 # Логирование
@@ -129,8 +130,8 @@ fi
 
 log "Проверка AmneziaWG..."
 mark_step "AmneziaWG: check installation state"
-if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
-    warn "AmneziaWG уже настроен, пропускаем переустановку."
+if command -v awg >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ] && (lsmod | grep -q amneziawg || modprobe amneziawg 2>/dev/null); then
+    warn "AmneziaWG уже настроен и модуль ядра загружен, пропускаем переустановку."
 else
     mark_step "AmneziaWG: install build dependencies"
     ensure_awg_build_dependencies
