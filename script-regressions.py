@@ -499,6 +499,26 @@ if os.path.exists(setup_agh_path):
     assert_match(setup_agh_text, r"install_adguardhome", "setup-agh.sh must contain or call install_adguardhome.")
     assert_match(setup_agh_text, r"configure_adguardhome", "setup-agh.sh must contain or call configure_adguardhome.")
 
+setup_output_path = os.path.join(SOURCE_ROOT, "setup-output.sh")
+assert_path_exists(setup_output_path, "src/setup/setup-output.sh must be created as a standalone script.")
+
+if os.path.exists(setup_output_path):
+    setup_output_text = read_text(setup_output_path)
+    assert_match(setup_output_text, r"^#!/bin/bash", "setup-output.sh must include a bash shebang.")
+    assert_match(setup_output_text, r"print_target_output|print_relay_output", "setup-output.sh must contain printing logic.")
+
+setup_orchestrator_path = os.path.join(SOURCE_ROOT, "setup-orchestrator.sh")
+assert_path_exists(setup_orchestrator_path, "src/setup/setup-orchestrator.sh must be created.")
+
+if os.path.exists(setup_orchestrator_path):
+    orchestrator_text = read_text(setup_orchestrator_path)
+    assert_match(orchestrator_text, r"^#!/bin/bash", "setup-orchestrator.sh must include a bash shebang.")
+    assert_match(orchestrator_text, r"setup-vps\.sh", "setup-orchestrator.sh must call setup-vps.sh.")
+    assert_match(orchestrator_text, r"setup-3x\.sh", "setup-orchestrator.sh must call setup-3x.sh.")
+    assert_match(orchestrator_text, r"setup-awg\.sh", "setup-orchestrator.sh must call setup-awg.sh.")
+    assert_match(orchestrator_text, r"setup-agh\.sh", "setup-orchestrator.sh must call setup-agh.sh.")
+    assert_match(orchestrator_text, r"setup-output\.sh", "setup-orchestrator.sh must call setup-output.sh.")
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------

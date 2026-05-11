@@ -36,6 +36,18 @@ read_url_port() {
     printf '%s' "$raw" | tr -d '\r'
 }
 
+save_cred() {
+    local key="$1"
+    local val="$2"
+    local file="${3:-$CREDS_FILE}"
+    touch "$file"
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+    else
+        echo "${key}=${val}" >> "$file"
+    fi
+}
+
 cleanup_legacy_adguard_units() {
     systemctl stop AdGuardHome 2>/dev/null || true
     systemctl stop adguardhome 2>/dev/null || true
@@ -178,5 +190,13 @@ OVERRIDE
 
 install_adguardhome
 configure_adguardhome
+
+mark_step "AdGuardHome: save credentials"
+SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
+save_cred "ADG_URL" "http://${SERVER_IP}:${ADG_PORT}/"
+save_cred "ADG_PORT" "$ADG_PORT"
+save_cred "ADG_USER" "$ADG_USER"
+save_cred "ADG_PASS" "$ADG_PASS"
+save_cred "ADG_DNS_PORT" "$ADG_DNS_PORT"
 
 log "Настройка AdGuardHome завершена."

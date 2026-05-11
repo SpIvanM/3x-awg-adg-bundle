@@ -41,6 +41,18 @@ read_config_assignment() {
     printf '%s' "$raw" | tr -d '\r'
 }
 
+save_cred() {
+    local key="$1"
+    local val="$2"
+    local file="${3:-$CREDS_FILE}"
+    touch "$file"
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+    else
+        echo "${key}=${val}" >> "$file"
+    fi
+}
+
 resolve_awg_key_bin() {
     command -v wg 2>/dev/null || command -v awg 2>/dev/null || true
 }
@@ -255,5 +267,21 @@ AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 chmod 600 /root/amnezia_client.conf
+
+mark_step "AmneziaWG: save credentials"
+save_cred "AWG_PORT" "$AWG_PORT"
+save_cred "AWG_SERVER_PRIV" "$SERVER_PRIV"
+save_cred "AWG_CLIENT_PRIV" "$CLIENT_PRIV"
+save_cred "AWG_CLIENT_PSK" "$CLIENT_PSK"
+save_cred "AWG_JC" "$JC"
+save_cred "AWG_JMIN" "$JMIN"
+save_cred "AWG_JMAX" "$JMAX"
+save_cred "AWG_S1" "$S1"
+save_cred "AWG_S2" "$S2"
+save_cred "AWG_H1" "$H1"
+save_cred "AWG_H2" "$H2"
+save_cred "AWG_H3" "$H3"
+save_cred "AWG_H4" "$H4"
+save_cred "AWG_CLIENT_CONF" "/root/amnezia_client.conf"
 
 log "Настройка AmneziaWG завершена."

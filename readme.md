@@ -162,7 +162,11 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-agh.sh | sudo bash
 ```
-*(Модуль оркестратора и генерации конфигов находится в разработке)*
+
+**Запуск нового модульного оркестратора (Все модули целиком):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-orchestrator.sh | sudo bash
+```
 
 ### Управление пробросом портов (fwd.sh)
 
@@ -377,7 +381,11 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-agh.sh | sudo bash
 ```
-*(The orchestrator and config generation module is currently under development)*
+
+**Run New Modular Orchestrator (All modules in sequence):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-orchestrator.sh | sudo bash
+```
 
 ### Port Forwarding Management (fwd.sh)
 
