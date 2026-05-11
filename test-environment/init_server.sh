@@ -1,6 +1,6 @@
 #!/bin/bash
 # Description: Initialize a new server configuration in .env/
-# Usage: ./tools/init_server.sh <server-name> [ip] [port] [user]
+# Usage: ./test-environment/init_server.sh <server-name> [ip] [port] [user]
 
 SERVER_NAME=$1
 IP=$2

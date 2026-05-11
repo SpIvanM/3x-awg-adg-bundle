@@ -1,6 +1,6 @@
 #!/bin/bash
 # Description: SSH connection wrapper using .env/ configurations
-# Usage: ./tools/ssh.sh <server-name>
+# Usage: ./test-environment/ssh.sh <server-name>
 
 SERVER_NAME=$1
 
@@ -62,12 +62,44 @@ if [ -n "$KEY_PATH" ]; then
     fi
 fi
 
-# Password reminder
+# Function to install sshpass
+install_sshpass() {
+    echo "sshpass is not installed. Attempting to install..."
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get update && sudo apt-get install -y sshpass
+    elif command -v brew >/dev/null 2>&1; then
+        brew install esolitos/ipa/sshpass
+    elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y sshpass
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y sshpass
+    else
+        echo "Error: Could not detect package manager. Please install 'sshpass' manually."
+        return 1
+    fi
+}
+
+# Password reminder and sshpass logic
+SSH_CMD="ssh"
 if [ -f "$SERVER_DIR/password" ]; then
-    echo "------------------------------------------------"
-    echo "PASSWORD: $(cat "$SERVER_DIR/password")"
-    echo "------------------------------------------------"
+    PASSWORD=$(cat "$SERVER_DIR/password" | tr -d '\r\n')
+    if [ -n "$PASSWORD" ]; then
+        if ! command -v sshpass >/dev/null 2>&1; then
+            install_sshpass
+        fi
+
+        if command -v sshpass >/dev/null 2>&1; then
+            export SSHPASS="$PASSWORD"
+            SSH_CMD="sshpass -e ssh"
+            echo "Using sshpass for automatic login..."
+        else
+            echo "------------------------------------------------"
+            echo "PASSWORD: $PASSWORD"
+            echo "------------------------------------------------"
+            echo "Tip: Install 'sshpass' to connect without password prompt."
+        fi
+    fi
 fi
 
 echo "Connecting to $SERVER_NAME ($USER@$IP:$PORT)..."
-ssh $SSH_OPTS "$USER@$IP"
+$SSH_CMD $SSH_OPTS "$USER@$IP"
