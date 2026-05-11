@@ -138,6 +138,17 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
+### Индивидуальный запуск модулей (Модульная архитектура)
+
+Проект переходит на модульную архитектуру, где каждый компонент можно запустить независимо.
+Это полезно для отладки или настройки только одного сервиса.
+
+**Запуск настройки VPS (Базовая оптимизация OS и безопасность):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-vps.sh | sudo bash
+```
+*(Остальные независимые модули `setup-3x.sh`, `setup-awg.sh`, `setup-agh.sh` находятся в разработке)*
+
 ### Управление пробросом портов (fwd.sh)
 
 Если вам нужно изменить правила проброса портов без переустановки всего стека, используйте инструмент `fwd.sh`.
@@ -158,6 +169,28 @@ sudo bash tools/fwd.sh
 ```
 
 
+
+### Установка iperf3-сервера (iperf3-server.sh)
+
+Служебный скрипт для быстрого развертывания `iperf3` на сервере — удобно для диагностики пропускной способности.
+
+**Что делает:**
+- Устанавливает `iperf3` через `apt` (пропускает, если уже установлен).
+- Выбирает случайный свободный порт из диапазона `10000–65000`.
+- Создаёт systemd-сервис `iperf3-server` с автозапуском.
+- Открывает порт в `UFW`.
+- Выводит команду для подключения клиента.
+- Идемпотентен: повторный запуск покажет текущий порт и не пересоздаст сервис.
+
+**Запуск:**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/tools/iperf3-server.sh | sudo bash
+```
+
+**Подключение клиента:**
+```bash
+iperf3 -c <SERVER_IP> -p <PORT>
+```
 
 ### Что настроить вручную после installer-а `3x-ui`
 
@@ -305,6 +338,17 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/setup.sh | sudo bash -s -- --rotate
 ```
 
+### Individual module execution (Modular architecture)
+
+The project is migrating to a modular architecture where each component can be executed independently.
+This is useful for debugging or configuring just a single service.
+
+**Run VPS Setup (Base OS optimization and security):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-vps.sh | sudo bash
+```
+*(Other standalone modules `setup-3x.sh`, `setup-awg.sh`, `setup-agh.sh` are currently under development)*
+
 ### Port Forwarding Management (fwd.sh)
 
 If you need to modify port forwarding rules without reinstalling the entire stack, use the `fwd.sh` tool.
@@ -325,6 +369,28 @@ sudo bash tools/fwd.sh
 ```
 
 
+
+### iperf3 Server Setup (iperf3-server.sh)
+
+A utility script for quickly deploying `iperf3` on a server — handy for bandwidth diagnostics.
+
+**What it does:**
+- Installs `iperf3` via `apt` (skips if already installed).
+- Picks a random free port from the `10000–65000` range.
+- Creates a systemd service `iperf3-server` with auto-start.
+- Opens the port in `UFW`.
+- Prints the client connection command.
+- Idempotent: re-running shows the current port without recreating the service.
+
+**Usage:**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/tools/iperf3-server.sh | sudo bash
+```
+
+**Client connection:**
+```bash
+iperf3 -c <SERVER_IP> -p <PORT>
+```
 
 ### Manual steps after the `3x-ui` installer
 

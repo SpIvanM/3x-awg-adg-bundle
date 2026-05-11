@@ -22,6 +22,10 @@ Description: Индекс модулей для сборки setup.sh и lifecyc
 
 ## Назначение модулей
 
+### Новая архитектура (Оркестратор и самостоятельные скрипты)
+- `setup-vps.sh` - самостоятельный исполняемый скрипт для системной подготовки, настройки `apt`, `sysctl`, swapfile, и базовых сетевых параметров. Создан в рамках перехода к модульному оркестратору.
+
+### Классические source-модули
 - `00-bootstrap.sh` - shebang, глобальные переменные, CLI, логирование, step-aware trap/err, assembled header и базовые инварианты запуска.
 - `10-common.sh` - общие helper-функции: чтение credentials и конфигов, CRLF-нормализация, разбор URL-порта, soft-validation AWG/AGH/3x-ui и управление swapfile.
 - `11-awg-helpers.sh` - helper-функции AmneziaWG: fallback на `wg`, подготовка build dependencies, восстановление существующих AWG credentials, идемпотентная генерация obfuscation-параметров и cleanup legacy DNS redirect-правил.

@@ -460,6 +460,19 @@ assert_not_match(setup, r"CASCADE_|VLESS_LINK|ADG_HTTP_PROXY_PORT|XRAY_",
     "setup.sh credentials and runtime must remain free of legacy cascade/Xray fields.")
 
 # ---------------------------------------------------------------------------
+# Stage 8: Orchestrator extraction
+# ---------------------------------------------------------------------------
+
+setup_vps_path = os.path.join(SOURCE_ROOT, "setup-vps.sh")
+assert_path_exists(setup_vps_path, "src/setup/setup-vps.sh must be created as a standalone script.")
+
+if os.path.exists(setup_vps_path):
+    setup_vps_text = read_text(setup_vps_path)
+    assert_match(setup_vps_text, r"^#!/bin/bash", "setup-vps.sh must include a bash shebang.")
+    assert_match(setup_vps_text, r"LAST_RUN_FILE=\$\{LAST_RUN_FILE:-", "setup-vps.sh must set default global variables.")
+    assert_match(setup_vps_text, r"ensure_swapfile", "setup-vps.sh must include or call ensure_swapfile.")
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 
