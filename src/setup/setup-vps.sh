@@ -1,15 +1,13 @@
 #!/bin/bash
 # ==============================================================================
 # setup-vps.sh
-# 1. БАЗОВАЯ ОПТИМИЗАЦИЯ И БЕЗОПАСНОСТЬ OS
+# Базовая оптимизация OS и безопасность
 # ==============================================================================
 set -Ee
+export DEBIAN_FRONTEND=noninteractive
 
 # Глобальные переменные по умолчанию
 LAST_RUN_FILE=${LAST_RUN_FILE:-"/root/.vpn-setup-last-run"}
-CREDS_FILE=${CREDS_FILE:-"/root/.vpn-credentials"}
-DEPLOY_MODE=${DEPLOY_MODE:-"target"}
-ROTATE_CREDS=${ROTATE_CREDS:-0}
 
 # Логирование
 log() { echo -e "\e[32m[INFO] $1\e[0m"; }
@@ -17,40 +15,42 @@ warn() { echo -e "\e[33m[WARN] $1\e[0m"; }
 err() { echo -e "\e[31m[ERROR] $1\e[0m"; exit 1; }
 mark_step() { log "Шаг: $1"; }
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ensure_swapfile() {
+    local swapfile="/swapfile"
+    local swap_size="1G"
+    local fstab_line="/swapfile none swap sw 0 0 # 3x-awg-adg-bundle"
 
-if [ -f "$SCRIPT_DIR/10-common.sh" ]; then
-    source "$SCRIPT_DIR/10-common.sh"
-else
-    # Fallback для ensure_swapfile если хелпер не загрузился
-    ensure_swapfile() {
-        local swapfile="/swapfile"
-        local swap_size="1G"
-        local fstab_line="/swapfile none swap sw 0 0 # 3x-awg-adg-bundle"
+    if swapon --show --noheadings 2>/dev/null | grep -q .; then
+        warn "Swap уже активен, пропускаем создание swapfile."
+        return 0
+    fi
 
-        if swapon --show --noheadings 2>/dev/null | grep -q .; then
-            warn "Swap уже активен, пропускаем создание swapfile."
-            return 0
-        fi
-
+    if [ -f "$swapfile" ]; then
+        log "Используем существующий swapfile ${swapfile}."
+    else
         log "Создание swapfile ${swapfile} (${swap_size})..."
         if command -v fallocate >/dev/null 2>&1; then
-            fallocate -l "$swap_size" "$swapfile" || dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
+            if ! fallocate -l "$swap_size" "$swapfile"; then
+                warn "fallocate не сработал, используем dd для создания swapfile."
+                dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
+            fi
         else
             dd if=/dev/zero of="$swapfile" bs=1M count=1024 status=none
         fi
         chmod 600 "$swapfile"
         mkswap "$swapfile" >/dev/null
-        if ! grep -qF "$fstab_line" /etc/fstab; then
-            echo "$fstab_line" >> /etc/fstab
-        fi
-        swapon "$swapfile"
-        log "Swapfile активирован: ${swapfile}"
-    }
-fi
+    fi
 
-if [ -f "$SCRIPT_DIR/14-port-forwarding-helpers.sh" ]; then
-    source "$SCRIPT_DIR/14-port-forwarding-helpers.sh"
+    chmod 600 "$swapfile"
+    if ! grep -qF "$fstab_line" /etc/fstab; then
+        echo "$fstab_line" >> /etc/fstab
+    fi
+    swapon "$swapfile"
+    log "Swapfile активирован: ${swapfile}"
+}
+
+if [ "$EUID" -ne 0 ]; then
+  err "Запустите скрипт от имени root (sudo -i)"
 fi
 
 TODAY=$(date +%Y-%m-%d)
@@ -71,12 +71,10 @@ if [ "$SKIP_APT" -eq 0 ]; then
     rm -f /etc/apt/sources.list.d/*backports*.list 2>/dev/null || true
 
     log "Обновление системы и установка базовых пакетов..."
-    apt update && DEBIAN_FRONTEND=noninteractive apt upgrade -y
-    # Базовые пакеты и точные headers текущего ядра для детерминированной сборки AWG.
-    DEBIAN_FRONTEND=noninteractive apt install -y curl wget mc ufw fail2ban nano iptables iptables-persistent \
+    apt update && apt upgrade -y
+    apt install -y curl wget mc ufw fail2ban nano iptables iptables-persistent \
                    jq openssl whois qrencode dnsutils python3 wireguard-tools "linux-headers-$(uname -r)" \
-        || err "Не удалось установить обязательные пакеты и точные kernel headers для $(uname -r)."
-    # Обновляем дату последнего полного запуска
+        || err "Не удалось установить обязательные пакеты."
     date +%Y-%m-%d > "$LAST_RUN_FILE"
 else
     log "Пропуск apt-операций (fast mode). Убеждаемся в наличии jq, openssl, python3 и dig..."
@@ -90,53 +88,29 @@ fi
 if [ "$SKIP_APT" -eq 0 ]; then
     mark_step "System: editor defaults"
     log "Настройка редактора mcedit по умолчанию..."
-    update-alternatives --set editor /usr/bin/mcedit || true
+    update-alternatives --set editor /usr/bin/mcedit 2>/dev/null || true
     export EDITOR=mcedit
-    if ! grep -q "export EDITOR=mcedit" ~/.bashrc; then
-        echo 'export EDITOR=mcedit' >> ~/.bashrc
-    fi
 fi
 
 mark_step "System: sysctl hardening"
 log "Оптимизация sysctl (сеть, BBR, лимиты)..."
-rm -f /etc/sysctl.d/99-custom-net.conf
-cat <<EOF > /etc/sysctl.d/99-custom-net.conf
-fs.file-max = 1048576
-net.core.rmem_max = 67108864
-net.core.wmem_max = 67108864
-net.core.netdev_max_backlog = 10000
-net.core.somaxconn = 4096
-net.ipv4.tcp_syncookies = 1
-net.ipv4.tcp_tw_reuse = 1
-net.ipv4.tcp_fin_timeout = 15
-net.ipv4.tcp_keepalive_time = 1200
-net.ipv4.tcp_max_syn_backlog = 8192
-net.ipv4.tcp_max_tw_buckets = 5000
-net.ipv4.tcp_fastopen = 3
-net.ipv4.tcp_mtu_probing = 1
+cat <<EOF > /etc/sysctl.d/99-vpn-server.conf
+# Отключение IPv6
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+
+# BBR + fq
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+
+# Оптимизация сети
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_mtu_probing = 1
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
 net.ipv4.ip_forward = 1
 EOF
-sysctl --system 2>&1 | grep -v 'Invalid argument' | grep -v '^$' | head -20 || true
+sysctl -p /etc/sysctl.d/99-vpn-server.conf
 
-mark_step "System: prepare runtime context"
-log "Подготовка общих сетевых параметров..."
-export SERVER_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
-export PUB_INT=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-
-if [ -f "$CREDS_FILE" ] && [ "$ROTATE_CREDS" -eq 0 ]; then
-    log "Загрузка существующего DNS порта AdGuardHome из $CREDS_FILE..."
-    ADG_DNS_PORT=$(grep "^ADG_DNS_PORT=" "$CREDS_FILE" 2>/dev/null | head -n1 | cut -d'=' -f2- | tr -d '\r' || true)
-fi
-
-[ -z "$ADG_DNS_PORT" ] && ADG_DNS_PORT=$(shuf -i 10000-65000 -n 1)
-export ADG_DNS_PORT
-
-if [ "$DEPLOY_MODE" = "relay" ]; then
-    if command -v prompt_target_details >/dev/null 2>&1; then
-        prompt_target_details
-    else
-        warn "prompt_target_details not found, skipping relay target prompt."
-    fi
-fi
+log "Настройка VPS завершена."
