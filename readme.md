@@ -152,7 +152,12 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-3x.sh | sudo bash
 ```
-*(Остальные независимые модули `setup-awg.sh`, `setup-agh.sh` находятся в разработке)*
+
+**Запуск настройки AmneziaWG (Установка, ключи, обфускация):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-awg.sh | sudo bash
+```
+*(Остальные независимые модули `setup-agh.sh` находятся в разработке)*
 
 ### Управление пробросом портов (fwd.sh)
 
@@ -357,7 +362,12 @@ sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-3x.sh | sudo bash
 ```
-*(Other standalone modules `setup-awg.sh`, `setup-agh.sh` are currently under development)*
+
+**Run AmneziaWG Setup (Install, keys, obfuscation):**
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/SpIvanM/3x-awg-adg-bundle/main/src/setup/setup-awg.sh | sudo bash
+```
+*(Other standalone modules `setup-agh.sh` are currently under development)*
 
 ### Port Forwarding Management (fwd.sh)
 

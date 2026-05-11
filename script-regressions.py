@@ -481,6 +481,15 @@ if os.path.exists(setup_3x_path):
     assert_match(setup_3x_text, r"install_3x_ui_interactive", "setup-3x.sh must contain or call install_3x_ui_interactive.")
     assert_match(setup_3x_text, r"remove_legacy_xui", "setup-3x.sh must contain or call remove_legacy_xui.")
 
+setup_awg_path = os.path.join(SOURCE_ROOT, "setup-awg.sh")
+assert_path_exists(setup_awg_path, "src/setup/setup-awg.sh must be created as a standalone script.")
+
+if os.path.exists(setup_awg_path):
+    setup_awg_text = read_text(setup_awg_path)
+    assert_match(setup_awg_text, r"^#!/bin/bash", "setup-awg.sh must include a bash shebang.")
+    assert_match(setup_awg_text, r"ensure_awg_build_dependencies", "setup-awg.sh must contain or call ensure_awg_build_dependencies.")
+    assert_match(setup_awg_text, r"resolve_awg_key_bin", "setup-awg.sh must contain or call resolve_awg_key_bin.")
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
