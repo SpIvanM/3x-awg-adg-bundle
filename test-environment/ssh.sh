@@ -2,6 +2,12 @@
 # Description: SSH connection wrapper using .env/ configurations
 # Usage: ./test-environment/ssh.sh <server-name>
 
+# Handle askpass requests
+if [ "$1" == "--askpass" ]; then
+    echo "$SSHPASS_TEMP"
+    exit 0
+fi
+
 SERVER_NAME=$1
 
 # Change to project root if script is run from tools/
@@ -19,7 +25,7 @@ if [ -z "$SERVER_NAME" ]; then
             echo "  (No server subdirectories found in test-environment/.env/)"
         fi
     else
-        echo "  (No test-environment/.env directory found. Run ./tools/init_server.sh to create one)"
+        echo "  (No test-environment/.env directory found. Run ./test-environment/init_server.sh to create one)"
     fi
     exit 1
 fi
@@ -69,13 +75,16 @@ install_sshpass() {
         sudo apt-get update && sudo apt-get install -y sshpass
     elif command -v brew >/dev/null 2>&1; then
         brew install esolitos/ipa/sshpass
+    elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+        if command -v choco >/dev/null 2>&1; then
+            choco install -y sshpass
+        elif command -v scoop >/dev/null 2>&1; then
+            scoop install sshpass
+        fi
     elif command -v yum >/dev/null 2>&1; then
         sudo yum install -y sshpass
     elif command -v dnf >/dev/null 2>&1; then
         sudo dnf install -y sshpass
-    else
-        echo "Error: Could not detect package manager. Please install 'sshpass' manually."
-        return 1
     fi
 }
 
@@ -84,19 +93,19 @@ SSH_CMD="ssh"
 if [ -f "$SERVER_DIR/password" ]; then
     PASSWORD=$(cat "$SERVER_DIR/password" | tr -d '\r\n')
     if [ -n "$PASSWORD" ]; then
-        if ! command -v sshpass >/dev/null 2>&1; then
-            install_sshpass
-        fi
-
         if command -v sshpass >/dev/null 2>&1; then
             export SSHPASS="$PASSWORD"
             SSH_CMD="sshpass -e ssh"
             echo "Using sshpass for automatic login..."
         else
-            echo "------------------------------------------------"
-            echo "PASSWORD: $PASSWORD"
-            echo "------------------------------------------------"
-            echo "Tip: Install 'sshpass' to connect without password prompt."
+            # Zero-dependency fallback using SSH_ASKPASS
+            export SSHPASS_TEMP="$PASSWORD"
+            export SSH_ASKPASS="$(realpath "$0")"
+            export SSH_ASKPASS_REQUIRE=force
+            # We need to use a fake DISPLAY on Linux/WSL to trigger ASKPASS
+            if [ -z "$DISPLAY" ]; then export DISPLAY=":0"; fi
+            
+            echo "Using SSH_ASKPASS for automatic login (no sshpass needed)..."
         fi
     fi
 fi
